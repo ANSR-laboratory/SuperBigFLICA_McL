@@ -7,7 +7,7 @@ SuperBigFLICA is a semi-supervised, multi-modal data fusion framework designed t
 - **Blends multiple brain‑scan types in one model** – MRI, fMRI, DTI or other measures can be analysed together.
 - **Finds common patterns across people** – the code learns a small set of “scores” for each participant that capture how strongly they show those brain patterns.
 - **Predicts clinical or behavioural outcomes at the same time** – training is guided both by how well the scans are reconstructed and how well the model forecasts the target variable (e.g., symptom severity).
-- **Keeps a separate map for each scan type** – you still get modality‑specific brain maps that are easy to visualise.
+- **Keeps a separate map for each scan type** – you still get modality‑specific brain maps that are easy to visualize.
 - **Flexible and hardware‑friendly** – adjustable hyper‑parameters, runs on CPU or GPU, and includes ready‑made dataset and training utilities.
 
 ## File Structure
