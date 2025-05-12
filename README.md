@@ -1,4 +1,4 @@
-# Supervised BigFLICA (SuperBigFLICA)
+# Supervised Big-data FMRIB’s Linked Independent Component Analysis (SuperBigFLICA)
 
 SuperBigFLICA is a semi-supervised, multi-modal data fusion framework designed to extract interpretable spatial components from neuroimaging data while jointly predicting clinical outcomes. This implementation supports multimodal brain imaging analysis and is tailored for studies in aging, dementia, and related neurological conditions.
 
