@@ -6,90 +6,7 @@ import numpy as np          #1.26.3
 import nibabel as nib       #5.2.0
 import torch                #2.1.2
 import pandas as pd         #2.2.1
-
-# import resource
-# import time
-
-# # Set memory limit (in bytes, 1 GB here)
-# memory_limit = 50 * 1024 * 1024 * 1024  # 24 GB
-# resource.setrlimit(resource.RLIMIT_AS, (memory_limit, memory_limit))
-
-
-# # Get current memory limits
-# soft_limit, hard_limit = resource.getrlimit(resource.RLIMIT_AS)
-# print(f"Soft limit: {soft_limit / (1024**2)} MB")
-# print(f"Hard limit: {hard_limit / (1024**2)} MB")
-
-# # Set the number of threads to use for BLAS, OpenMP, or other parallel libraries
-# os.environ["OMP_NUM_THREADS"] = "2"  # Limits OpenMP to 4 threads
-# os.environ["MKL_NUM_THREADS"] = "2"  # Limits Intel MKL to 4 threads
-# os.environ["OPENBLAS_NUM_THREADS"] = "2"  # Limits OpenBLAS to 4 threads
-# os.environ["NUMEXPR_NUM_THREADS"] = "2"  # Limits NumExpr to 4 threads
-# os.environ["VECLIB_MAXIMUM_THREADS"] = "2"  # Limits Apple's Accelerate to 4 threads
-# os.environ["MAX_NUM_THREADS"] = "2"  # Generic limit
-
-# # Optional: Ensure libraries like NumPy respect the thread limit
-# np.seterr(all='ignore')
-
-# # Limit PyTorch to 4 threads
-# torch.set_num_threads(2)
-# torch.set_num_interop_threads(2)
-
-# import psutil
-# # Get the current process
-# process = psutil.Process(os.getpid())
-
-# process.cpu_affinity([0, 1, 2])  # Restrict to cores 0 and 1
-
-
-
-# # # Inspect all threads
-# threads = process.threads()
-# print(f"Number of threads: {len(threads)}")
-# print("Thread details:")
-# for t in threads:
-#     print(f"Thread ID: {t.id}, User Time: {t.user_time}, System Time: {t.system_time}")
-
-# # Check memory usage
-# print(f"Memory usage: {process.memory_info().rss / 1e6} MB")  # Resident Set Size in MB
-
-# # Check the number of threads
-# print(f"Number of threads: {process.num_threads()}")
-
-# # Check CPU affinity (cores the process is allowed to run on)
-# print(f"CPU affinity: {process.cpu_affinity()}")
-
-
-#may need to do install pip torch at command line first
-
-# To set up the tools:
-
-#   1) On the cluster, activate the virtual environment by typing (without the #'s) at the command line and activate fsl and freesurfer:
-#       source /data/qnilab/Virt_Envs/bigflica/bin/activate.csh (or .../bin/activate if in bash)
-#       module add fsl              #fsl-6.0.7.4
-#       module add freesurfer       #freesurfer-7.3.2
-
-        #      below, you'll need the path to fsl and freesurfer. You can do which to get them)
-
-#   2) Analysis scripts are in /data/qnilab/AD_NPS_R02_2022/SuperBigFLICA_python. Open Run_SupBigFLICA.py then SAVE a copy of this with your
-#        analysis name in the filename, e.g. Run_SupBigFLICA_LN_HCP_04Sept2024.py
-
-#   3) Edit YOUR COPY of Run_SupBigFLICA as indicated in the script.
-
-#   4) Edit options and/or filepaths in lines 26, 33-38, 45-47, 55-71)
-
-#   5) Once your copy is set up, then run it at the command line (THIS NEEDS TESTING!!! May also want to specify cpus/mem to run, see confluence)
-#       srun --pty $SHELL
-#       sbatch Run_SupBigFLICA_StructPET_09112024.py
-
-# sys.path.append('/data/qnilab/AD_NPS_R01_2022/HCP_Data_Fusion/SuperBigFLICA/scripts/SuperBigFLICA_LN/')
-sys.path.append('/home/ycheng23/SuperBigFLICA_python/Lastest_Versions_14Nov2024') 
-
-sys.version
-
-
-# Record the start time
-# start_time = time.time()
+import utils3
 
 # Load the non-imaging data for SBF
 
@@ -98,32 +15,22 @@ print("Loading the non-imaging data and non-imaging targets for prediction")
 # Change the paths to point to your non-imaging data matrices in CSV format, all superfluous columns (like subject ID) removed, no NANs
 # Data train and data validation are fed into SuperBigFLICA, data test is fed into get_model_param.py to apply the model from SBF to your new data
 
-# nIDPs_validation=np.loadtxt('/data/qnilab/ADNI/Analyses/SBF/SBF_inputs_StructPET_09112024/nIDP_CDRSB_matrix_validation.csv', delimiter=",")
-# nIDPs_test=np.loadtxt('/data/qnilab/ADNI/Analyses/SBF/SBF_inputs_StructPET_09112024/nIDP_CDRSB_matrix_test.csv', delimiter=",")
-# nIDPs_train=np.loadtxt('/data/qnilab/ADNI/Analyses/SBF/SBF_inputs_StructPET_09112024/nIDP_CDRSB_matrix_training.csv', delimiter=",")
-nIDPs_validation=np.loadtxt('/data/qnilab/AD_NPS_R01_2022/ADNI_Data_Fusion/Flica_inputs/nIDP_CDRSB_matrix_validation.csv', delimiter=",")
-nIDPs_test=np.loadtxt('/data/qnilab/AD_NPS_R01_2022/ADNI_Data_Fusion/Flica_inputs/nIDP_CDRSB_matrix_test.csv', delimiter=",")
-nIDPs_train=np.loadtxt('/data/qnilab/AD_NPS_R01_2022/ADNI_Data_Fusion/Flica_inputs/nIDP_CDRSB_matrix_training.csv', delimiter=",")
+
+nIDPs_validation=np.loadtxt('/data/Flica_inputs/nIDP_CDRSB_matrix_validation.csv', delimiter=",")
+nIDPs_test=np.loadtxt('/data/Flica_inputs/nIDP_CDRSB_matrix_test.csv', delimiter=",")
+nIDPs_train=np.loadtxt('/data/Flica_inputs/nIDP_CDRSB_matrix_training.csv', delimiter=",")
 
 nIDPs_test_npy=np.matrix(nIDPs_test)
 nIDPs_train_npy=np.matrix(nIDPs_train)
 nIDPs_validation_npy=np.matrix(nIDPs_validation)
 
 # Change the column indexes to pick out the variables for training (e.g., in the train dataset, and the target(s) in the test/validation datasets
-indices_to_include = 0 # [19, 20] # [18, 19, 20, 21] # [x + 6 for x in [0, 2, 3, 4, 6, 7, 8, 10, 11]]
-nIDPs_test_targets = nIDPs_test_npy[:, indices_to_include]#[:,[13,14]] # 0 - CDRSB, 1 - Site, 2 - sex, 3 - age, 4 - GDS, 5 - NPI
+indices_to_include = 0 
+nIDPs_test_targets = nIDPs_test_npy[:, indices_to_include] # 0 - CDRSB, 1 - Site, 2 - sex, 3 - age, 4 - GDS, 5 - NPI
 
-nIDPs_train_set = nIDPs_train_npy[:,indices_to_include]#[:,[13,14]]
+nIDPs_train_set = nIDPs_train_npy[:,indices_to_include]
 
-nIDPs_validation_targets = nIDPs_validation_npy[:,indices_to_include]#[:,[13,14]]
-
-# Generate random noise and ensure the output is a matrix
-# nIDPs_test_targets = np.matrix(np.random.rand(nIDPs_test_npy.shape[0], 1))  # Column matrix
-# nIDPs_train_set = np.matrix(np.random.rand(nIDPs_train_npy.shape[0], 1))  # Column matrix
-# nIDPs_validation_targets = np.matrix(np.random.rand(nIDPs_validation_npy.shape[0], 1))  # Column matrix
-
-import utils3
-
+nIDPs_validation_targets = nIDPs_validation_npy[:,indices_to_include]
 
 # Create opts, which is a dictionary of options, filled in with your specific paths, modalities and SBF parameters to execute the SBF data fusion and validation in unseen dataset.
 
@@ -229,8 +136,6 @@ for opt_filetype in opts["modalities_order_filetypes"]:
 #add these to opts
 opts["SBFOut_headers"] = SBFOut_headers
 opts["SBFOut_affine"] = SBFOut_affine
-# opts["SBFOut_shapes"] = SBFOut_shapes
-
 
 # This code reorganizes the img_data into test, train, and validation data. E.g., all modalities for test_data are organized together into a single list of k matrices, ibid for train and validation, and all three lists
 # have modalities in the same order.
@@ -344,8 +249,6 @@ fname = "SBF_final_model.pth"
 fname_fullpath = os.path.join(outdir, fname)
 torch.save(final_model.state_dict(), fname_fullpath)
 
-from utils3 import get_model_param #, grid_search_elasticnet
-
 print("Starting application of the model to the test dataset")
 
 # First convert train and test to lists of tensors (data fusion requires lists of arrays, but get_model_param requires lists of tensors)
@@ -357,8 +260,6 @@ lat_train, lat_test, spatial_loadings, modality_weights, prediction_weights, pre
 
 
 print("Saving SuperBigFLICA outputs from get_model_param application to new test data")
-
-
 
 
 file_data_pairs = [
@@ -375,11 +276,6 @@ file_data_pairs = [
 # Save each file using a loop
 for fname, data in file_data_pairs:
     np.savetxt(os.path.join(outdir, fname), data, delimiter=',')
-
-
-
-
-from utils3 import SBF_save_everything
 
 spatial_maps = SBF_save_everything(outdir, spatial_loadings, img_info, opts, dictionaries)
 
