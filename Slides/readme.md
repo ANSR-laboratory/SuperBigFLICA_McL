@@ -44,4 +44,4 @@ Looking ahead, we plan to expand the SuperBigFLICA framework in several directio
 
 This work builds on the original [SuperBigFLICA GitHub repository](https://github.com/weikanggong/SuperBigFLICA) and is being actively extended as part of the NIA-funded project **RF1AG078304**.
 
-For questions or contributions, please contact Lily Cheng (McLean Hospital / Harvard Medical School).
+For questions or contributions, please contact [Lily Cheng](YCHENG23@mgh.harvard.edu) (McLean Hospital / Harvard Medical School).
