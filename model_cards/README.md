@@ -1,1 +1,14 @@
+# Model Cards
 
+This directory contains model documentation for specific instances of SuperBigFLICA trained on different datasets and targets.
+
+## Available Model Cards
+
+- [SuperBigFLICA on ADNI-3 (CDR-SOB prediction)](sbf_adni3_cdrsob.md)
+- [SuperBigFLICA on HCP Young Adults (delayed discounting)](sbf_hcp_dd.md)
+
+Each model card provides details about:
+- Model configuration and training setup
+- Intended use and limitations
+- Evaluation factors and performance
+- Ethical considerations and caveats
