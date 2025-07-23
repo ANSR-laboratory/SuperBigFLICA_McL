@@ -6,17 +6,23 @@
 - **Model Type**: Semi-supervised multimodal fusion model  
 - **Training Algorithm**: Joint decomposition of 5 neuroimaging modalities with supervised prediction of CDR-SOB  
 - **Implementation**: Python 3.9, PyTorch 2.1.2  
-- **Contact**: *[Insert contact]*  
+- **Contact**: Lily Cheng (YCHENG23@mgh.harvard.edu), Lisa Nickerson (lisa_nickerson@hms.harvard.edu)
 - **License**: Research use only  
 
 ## Intended Use
-- **Primary Intended Uses**: Research tool to identify multimodal neuroimaging signatures predictive of dementia severity  
+- **Primary Intended Uses**: Research tool to identify multimodal neuroimaging signatures predictive of cognitive decline
 - **Primary Intended Users**: Neuroscientists, clinicians, and ML researchers in aging and dementia research  
 - **Out-of-Scope Uses**: Not for clinical diagnosis, treatment decisions, or real-time prediction outside the context of ADNI-like datasets  
 
 ## Factors
-- **Relevant Factors**: Demographics (age, sex), clinical diagnosis (CN, MCI, AD), imaging site  
-- **Evaluation Factors**:  
+- **Relevant Factors**: 
+Model performance may vary by participant characteristics and data source. Key factors include:
+	•	Age, sex, and clinical diagnosis (CN, MCI, AD), which influence brain structure and dementia severity.
+	•	Imaging site, due to differences in scanner hardware and acquisition protocols.
+These factors were selected based on known effects on brain imaging and clinical outcomes.
+
+- **Evaluation Factors**:
+To reduce site-related bias, participants from the same imaging site were kept within the same data split. We did not evaluate performance separately by age, sex, or diagnosis, but these are important for future analysis and fairness assessment.
 
 ## Metrics
 - **Model Performance Measures**: Predictive accuracy of CDR-SOB (e.g., R², MAE to be reported)  
