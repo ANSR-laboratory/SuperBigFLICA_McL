@@ -105,6 +105,10 @@ For more details, see the [FSL MELODIC documentation](https://fsl.fmrib.ox.ac.uk
   - `*_posterior.nii.gz` — posterior probability maps, giving voxelwise probabilities of belonging to the “signal” class.  
 - These maps are for **interpretation and visualization** of multimodal components, not used during training.
 
+
+### Results Visualization
+Interactive visualization of component and prediction weights is provided in [`../visualizations/SBF_results.html`](../visualizations/SBF_results.html).
+
 ---
 
 ### Notes
