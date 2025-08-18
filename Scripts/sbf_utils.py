@@ -498,7 +498,23 @@ def get_model_param(x_train, x_test, y_train, y_test, best_model, get_sp_load=1)
     lat_test = torch.Tensor.cpu(lat_test).detach().numpy()
     pred_train = np.multiply(pred_train.detach().numpy(), y_stds) + y_mean
     pred_test = np.multiply(pred_test.detach().numpy(), y_stds) + y_mean
-    best_performance = scipy.stats.pearsonr(pred_test, y_test)[0]
+
+    pred_test = np.atleast_2d(pred_test)
+    y_test = np.atleast_2d(y_test)
+
+
+    # ensure plain ndarrays (not np.matrix) and consistent 2D shape
+    pred = np.asarray(pred_test)
+    yt   = np.asarray(y_test)
+    if pred.ndim == 1: pred = pred[:, None]
+    if yt.ndim   == 1: yt   = yt[:, None]
+    assert pred.shape == yt.shape, f"{pred.shape=} {yt.shape=}"
+
+    # per‑target Pearson r (no lumping)
+    best_performance = np.array([scipy.stats.pearsonr(pred[:, i], yt[:, i])[0]
+                                for i in range(pred.shape[1])])
+
+    # best_performance = scipy.stats.pearsonr(pred_test, y_test)[0]
     spatial_loadings = []
     if get_sp_load == 1:
         for i in range(0, nmod):
