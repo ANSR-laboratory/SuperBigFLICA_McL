@@ -6,8 +6,8 @@ import numpy as np          #1.26.3
 import nibabel as nib       #5.2.0
 import torch                #2.1.2
 import pandas as pd         #2.2.1
-import utils
-from utils import SBF_load, get_model_param, sort_and_filter_by_modality_order, SBF_save_everything
+import sbf_utils
+from sbf_utils import SBF_load, get_model_param, sort_and_filter_by_modality_order, SBF_save_everything
 
 
 
@@ -28,27 +28,20 @@ nIDPs_validation_npy=np.matrix(nIDPs_validation)
 
 # Change the column indexes to pick out the variables for training (e.g., in the train dataset, and the target(s) in the test/validation datasets
 indices_to_include = 0 
-nIDPs_test_targets = nIDPs_test_npy[:, indices_to_include]
+nIDPs_test_targets = nIDPs_test_npy[:, indices_to_include]# 0 - CDRSB, 1 - Site, 2 - sex, 3 - age, 4 - GDS, 5 - NPI
 
 nIDPs_train_set = nIDPs_train_npy[:,indices_to_include]
 
 nIDPs_validation_targets = nIDPs_validation_npy[:,indices_to_include]
-
-# Generate random noise and ensure the output is a matrix
-# nIDPs_test_targets = np.matrix(np.random.rand(nIDPs_test_npy.shape[0], 1))  # Column matrix
-# nIDPs_train_set = np.matrix(np.random.rand(nIDPs_train_npy.shape[0], 1))  # Column matrix
-# nIDPs_validation_targets = np.matrix(np.random.rand(nIDPs_validation_npy.shape[0], 1))  # Column matrix
-
-
 
 
 # Create opts, which is a dictionary of options, filled in with your specific paths, modalities and SBF parameters to execute the SBF data fusion and validation in unseen dataset.
 
 opts = {
     "brain_data_main_folder": "/data/qnilab/AD_NPS_R01_2022/ADNI_Data_Fusion/Flica_inputs/",
-    "output_dir": "/data/qnilab/AD_NPS_R01_2022/ADNI_Data_Fusion/SBF_Outputs/SBF_HCP_YC_12May2025/CDRSB",
-     "modalities_order": ['CT','TAU'],  #  'PSA', 'GM', 'AMY', 
-    "modalities_order_filetypes": [ '.mgh',  '.gz'],   # '.mgh', '.gz', '.gz',
+    "output_dir": "/data/qnilab/AD_NPS_R01_2022/ADNI_Data_Fusion/SBF_Outputs/SBF_ADNI_CDR/CDRSB",
+     "modalities_order": ['CT','TAU', 'PSA', 'GM', 'AMY'], 
+    "modalities_order_filetypes": [ '.mgh',  '.gz', '.mgh', '.gz', '.gz'],
     "fs_path": "/cm/shared/apps/freesurfer-7.3.2/bin/freesurfer",
     "path_to_fsavg": "/data/qnilab/AD_NPS_R01_2022/HCP_Data_Fusion/fsaverage",
     "fsl_path": "/cm/shared/apps/fsl-6.0.7.13/",
@@ -60,7 +53,7 @@ opts = {
     "lr": 0.05,
     "random_seed": 555,
     "maxiter": 30,
-    "batch_size": 128,
+    "batch_size": 32,
     "init_method": "random",
     "dicl_dim": 250
 }
@@ -119,7 +112,7 @@ os.makedirs(outdir, exist_ok=True)
 
 
 print("Loading the imaging data")
-img_data,img_info,modalities = utils.SBF_load(opts, nIDPs_train_set, nIDPs_test_targets, nIDPs_validation_targets)
+img_data,img_info,modalities = sbf_utils.SBF_load(opts, nIDPs_train_set, nIDPs_test_targets, nIDPs_validation_targets)
 
 #create headers for SBF output data using the same order as modalities_order and modalities_order_filetypes
 
@@ -166,9 +159,7 @@ for modality in modalities:
     modality_data[f"{modality}_data"] = img_data[index]
 
 # This code parses the modalities to group together modalities into test, train and validation lists of arrays to pass to SBF
-# Test_Data_list = [{'modality': key.replace('_data','').replace('test_',''), 'data': data} for key, data in modality_data.items() if 'test' in key]
-# Train_Data_list = [{'modality': key.replace('_data','').replace('test_',''), 'data': data} for key, data in modality_data.items() if 'train' in key]
-# Validation_Data_list = [{'modality': key.replace('_data','').replace('test_',''), 'data': data} for key, data in modality_data.items() if 'validation' in key]
+
 
 Test_Data_list = [{'modality': key.replace('_data','').replace('_test',''), 'data': data} for key, data in modality_data.items() if 'test' in key]
 Train_Data_list = [{'modality': key.replace('_data','').replace('_train',''), 'data': data} for key, data in modality_data.items() if 'train' in key]
@@ -193,9 +184,12 @@ Data_test = [item['data'] for item in Test_Data_list]
 Data_validation = [item['data'] for item in Validation_Data_list]
 
 
+
+
+
 print("Starting SuperBigFLICA")
 
-pred_best, best_model, loss_all_test, best_corr, final_model, Data_train, Data_validation, Data_test, dictionaries = utils.SupervisedFLICA(x_train = Data_train, y_train = nIDPs_train_set, x_test = Data_validation, y_test = nIDPs_validation_targets, 
+pred_best, best_model, loss_all_test, best_corr, final_model, Data_train, Data_validation, Data_test, dictionaries = sbf_utils.SupervisedFLICA(x_train = Data_train, y_train = nIDPs_train_set, x_test = Data_validation, y_test = nIDPs_validation_targets, 
 Data_test = Data_test,
 output_dir = opts["output_dir"],
 dropout = opts["dropout"], 
@@ -224,6 +218,7 @@ fname = "loss_all_test.csv"
 fname_fullpath = os.path.join(outdir, fname)
 np.savetxt(fname_fullpath, loss_all_test, delimiter=',')
 
+
 fname = "best_corr.txt"
 fname_fullpath = os.path.join(outdir, fname)
 # Write to the file using the full path
@@ -234,6 +229,7 @@ fname = "SBF_final_model.pth"
 fname_fullpath = os.path.join(outdir, fname)
 torch.save(final_model.state_dict(), fname_fullpath)
 
+# from utils3 import get_model_param #, grid_search_elasticnet
 
 print("Starting application of the model to the test dataset")
 
@@ -264,6 +260,7 @@ file_data_pairs = [
 # Save each file using a loop
 for fname, data in file_data_pairs:
     np.savetxt(os.path.join(outdir, fname), data, delimiter=',')
+
 
 
 spatial_maps = SBF_save_everything(outdir, spatial_loadings, img_info, opts, dictionaries)
