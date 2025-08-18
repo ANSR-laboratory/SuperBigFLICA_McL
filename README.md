@@ -39,4 +39,4 @@ SuperBigFLICA is a semi-supervised, multi-modal data fusion framework designed t
 Detailed documentation for trained models is available under [`model_cards/`](model_cards/):
 
 - [ADNI-3: Predicting CDR-SOB](sbf_cdrsob_adni3_MODEL_CARD.md)
-- HCP: Delayed discounting(coming)
+- HCP: Delayed discounting (coming)
