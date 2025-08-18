@@ -11,7 +11,7 @@
 
 
 # Set up output directory
-BASE_OUTPUT_DIR="/data/qnilab/AD_NPS_R01_2022/ADNI_Data_Fusion/SBF_Outputs/SBF_ADNI_CDR/CDRSB"
+BASE_OUTPUT_DIR="/data/qnilab/AD_NPS_R01_2022/ADNI_Data_Fusion/SBF_Outputs/SBF_ADNI_CDR/CDRSB" # Replace with your desired directory for output
 OUTPUT_DIR="$BASE_OUTPUT_DIR/job_$(date +'%Y%m%d_%H%M%S')"
 mkdir -p "$OUTPUT_DIR"  # Create the directory if it doesn't exist
 echo "All outputs will be saved to: $OUTPUT_DIR"
@@ -43,7 +43,7 @@ echo "Modules fsl and freesurfer loaded." | tee -a "$LOG_FILE"
 SECONDS=0  # Initialize a timer
 
 # Uncomment the Python script you want to run
-python3 -u /data/qnilab/AD_NPS_R01_2022/ADNI_Data_Fusion/scripts/SBF_scripts_clean/SBF.py
+python3 -u SBF.py
 
 
 # Record the end time
