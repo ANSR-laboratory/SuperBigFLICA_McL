@@ -113,10 +113,7 @@ For more details, see the [FSL MELODIC documentation](https://fsl.fmrib.ox.ac.uk
   - `modality_weights`: `n_components × n_modalities`  
   - `prediction_weights`: `n_components × n_targets`
 - **Ordering:** Subject order in CSVs matches the split construction in your run.  
-- **Privacy:** Do not publish subject-level outputs or weights trained on restricted datasets unless permitted by the DUA.
-- 
-
-**Availability:** To comply with ADNI DUA, we do not publish model weights or subject-level outputs. Code and instructions are provided for authorized users to reproduce.
+- **Privacy & Availability:** Access to [preprocessed input images](https://www.dropbox.com/home/You%20Cheng/SuperBigFLICA_McL/ADNI/Flica_inputs), [output spatial maps](https://www.dropbox.com/home/You%20Cheng/SuperBigFLICA_McL/ADNI/ADNI_SBF_CDR_Outputs), and [model weights](https://www.dropbox.com/home/You%20Cheng/SuperBigFLICA_McL/ADNI/ADNI_SBF_CDR_Outputs) (.pth files) is provided via [Dropbox](https://www.dropbox.com/home/You%20Cheng/SuperBigFLICA_McL) for authorized users under the ADNI DUA. [Code and instructions](https://github.com/ANSR-laboratory/SuperBigFLICA_McL/tree/main/Scripts) are publicly available for reproducibility.
 
 ---
 
