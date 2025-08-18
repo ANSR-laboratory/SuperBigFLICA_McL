@@ -1,6 +1,6 @@
 # Visualizations
 
-This folder contains figure outputs of the SBF model results saved in `.html` format.  
+This folder contains figure outputs of the SBF model results saved in `.html` and `.pdf` format.  
 
 Included:
 - **component_weights** — figure showing component spatial loadings across modalities.  
