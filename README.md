@@ -13,7 +13,7 @@ SuperBigFLICA is a semi-supervised, multi-modal data fusion framework designed t
 ## File Structure
 
 - `SBF.py`: Main training and testing script for the SuperBigFLICA model
-- `utils.py`: Supporting functions
+- `sbf_utils.py`: Supporting functions
   
 ## Requirements
 
