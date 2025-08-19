@@ -107,7 +107,7 @@ For more details, see the [FSL MELODIC documentation](https://fsl.fmrib.ox.ac.uk
 
 
 ### Results Visualization
-Interactive visualization of component and prediction weights is provided in [`../Visualizations/SBF_ADNI_CDRSOB_component_modality_visualization.pdf`](../Visualizations/SBF_ADNI_CDRSOB_component_modality_visualization.pdf).
+Visualization of component and prediction weights is provided in [`../Visualizations/SBF_ADNI_CDRSOB_component_modality_visualization.pdf`](../Visualizations/SBF_ADNI_CDRSOB_component_modality_visualization.pdf).
 
 ---
 
