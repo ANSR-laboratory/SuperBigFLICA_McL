@@ -35,7 +35,7 @@
 - - **Preprocessing:**  
   - **MRI:** fMRIPrep 20.2.7 with FreeSurfer cortical surfaces.  
   - **Amyloid PET:** SUVR maps motion-corrected, averaged, co-registered to T1w MRI, intensity-normalized to cerebellum, warped to MNI152 space.  
-    - Input data were **masked to retain only gray matter voxels**, excluding white matter, to focus on cortical amyloid signal.  
+    - Input data were **masked to retain only gray matter voxels** to minimize nonspecific white-matter signal.  
   - **Tau PET:** SUVR maps processed similarly (motion correction, cerebellar reference, MNI space).  **masked to retain only gray matter regions** and exclude white matter and cerebellum.
   - **GM density maps:** Derived from structural MRI; **masked to retain only gray matter regions** and exclude white matter.  
   - **Amyloid PET harmonization:** Centiloid scaling applied.  
