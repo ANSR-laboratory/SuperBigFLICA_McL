@@ -11,3 +11,9 @@ This repository contains scripts for running **SuperBigFLICA (SBF)** data fusion
 ### Local run
 ```bash
 python SBF.py
+```
+
+### Slurm cluster run
+```bash
+sbatch RUN_SBF_sbatch.sh
+```
