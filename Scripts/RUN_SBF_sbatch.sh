@@ -7,8 +7,6 @@
 #SBATCH --mem=100G                     # Memory requirement (increased based on observed utilization)
 #SBATCH --mail-type=ALL                # Email notifications for job start, end, and failure
 #SBATCH --mail-user=ycheng23@mgh.harvard.com
-#SBATCH -D /data/qnilab/AD_NPS_R01_2022/ADNI_Data_Fusion/scripts/SBF_scripts_clean  # CWD
-
 
 # Set up output directory
 BASE_OUTPUT_DIR="/data/qnilab/AD_NPS_R01_2022/ADNI_Data_Fusion/SBF_Outputs/SBF_ADNI_CDR/CDRSB" # Replace with your desired directory for output
