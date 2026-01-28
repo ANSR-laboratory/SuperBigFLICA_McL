@@ -17,15 +17,8 @@ SuperBigFLICA is a semi-supervised, multi-modal data fusion framework designed t
   
 ## Requirements
 
-- Python ≥ 3.11 (tested with 3.11.9)
-- PyTorch
-- NumPy
-- Pandas
-- NiBabel
-- SciPy
-- scikit-learn
-- Matplotlib
-- Joblib
+- Linux cluster (tested): Python ≥ 3.11 (tested with 3.11.9) and `requirements.txt`
+- macOS: use `requirements.macos.txt` (compatible with Python 3.10+)
 
 ## Getting Started
 
@@ -33,6 +26,21 @@ SuperBigFLICA is a semi-supervised, multi-modal data fusion framework designed t
 
    ```bash
    pip install -r requirements.txt
+   ```
+
+   macOS:
+
+   ```bash
+   pip install -r requirements.macos.txt
+   ```
+
+2. **Set environment variables (required for FSL/FreeSurfer paths):**
+
+   ```bash
+   export FSLDIR=/path/to/fsl
+   export FREESURFER_HOME=/path/to/freesurfer
+   export FSAVERAGE_PATH=/path/to/fsaverage
+   ```
 
 ## Model Cards
 

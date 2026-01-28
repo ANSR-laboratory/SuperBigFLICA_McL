@@ -1,0 +1,16 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+/.venv/
+
+# Local data / outputs
+Data/
+Data/**/*.md
+Data/SBF_outputs/
+GM_test/
+GM_train/
+GM_validation/
+Scripts/__pycache__/

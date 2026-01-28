@@ -18,40 +18,50 @@ print("Loading the non-imaging data and non-imaging targets for prediction")
 # Change the paths to point to your non-imaging data matrices in CSV format, all superfluous columns (like subject ID) removed, no NANs
 # Data train and data validation are fed into SuperBigFLICA, data test is fed into get_model_param.py to apply the model from SBF to your new data
 
-nIDPs_validation=np.loadtxt('/data/qnilab/AD_NPS_R01_2022/ADNI_Data_Fusion/Flica_inputs/nIDP_CDRSB_matrix_validation.csv', delimiter=",")
-nIDPs_test=np.loadtxt('/data/qnilab/AD_NPS_R01_2022/ADNI_Data_Fusion/Flica_inputs/nIDP_CDRSB_matrix_test.csv', delimiter=",")
-nIDPs_train=np.loadtxt('/data/qnilab/AD_NPS_R01_2022/ADNI_Data_Fusion/Flica_inputs/nIDP_CDRSB_matrix_training.csv', delimiter=",")
+def _load_nidp_csv(path):
+    data = np.loadtxt(path, delimiter=",")
+    data = np.atleast_2d(data)
+    if data.shape[0] == 1 and data.shape[1] > 1:
+        data = data.T
+    return data
 
-nIDPs_test_npy=np.matrix(nIDPs_test)
-nIDPs_train_npy=np.matrix(nIDPs_train)
-nIDPs_validation_npy=np.matrix(nIDPs_validation)
+
+nIDPs_train = _load_nidp_csv('Data/Flica_inputs/nIDP_CDRSB_matrix_training.csv')
+nIDPs_validation = _load_nidp_csv('Data/Flica_inputs/nIDP_CDRSB_matrix_validation.csv')
+nIDPs_test = _load_nidp_csv('Data/Flica_inputs/nIDP_CDRSB_matrix_test.csv')
+
+
+nIDPs_train_npy = nIDPs_train
+nIDPs_validation_npy = nIDPs_validation
+nIDPs_test_npy = nIDPs_test
 
 # Change the column indexes to pick out the variables for training (e.g., in the train dataset, and the target(s) in the test/validation datasets
-indices_to_include = 0 
-nIDPs_test_targets = nIDPs_test_npy[:, indices_to_include]# 0 - CDRSB, 1 - Site, 2 - sex, 3 - age, 4 - GDS, 5 - NPI
-
-nIDPs_train_set = nIDPs_train_npy[:,indices_to_include]
-
-nIDPs_validation_targets = nIDPs_validation_npy[:,indices_to_include]
+indices_to_include = 0
+nIDPs_test_targets = nIDPs_test_npy[:, [indices_to_include]]  # keep as column vector
+nIDPs_train_set = nIDPs_train_npy[:, [indices_to_include]]
+nIDPs_validation_targets = nIDPs_validation_npy[:, [indices_to_include]]
 
 
 # Create opts, which is a dictionary of options, filled in with your specific paths, modalities and SBF parameters to execute the SBF data fusion and validation in unseen dataset.
 
 opts = {
-    "brain_data_main_folder": "/data/qnilab/AD_NPS_R01_2022/ADNI_Data_Fusion/Flica_inputs/",
-    "output_dir": "/data/qnilab/AD_NPS_R01_2022/ADNI_Data_Fusion/SBF_Outputs/SBF_ADNI_CDR/CDRSB",
-     "modalities_order": ['CT','TAU', 'PSA', 'GM', 'AMY'], 
-    "modalities_order_filetypes": [ '.mgh',  '.gz', '.mgh', '.gz', '.gz'],
-    "fs_path": "/cm/shared/apps/freesurfer-7.3.2/bin/freesurfer",
-    "path_to_fsavg": "/data/qnilab/AD_NPS_R01_2022/HCP_Data_Fusion/fsaverage",
-    "fsl_path": "/cm/shared/apps/fsl-6.0.7.13/",
+    "brain_data_main_folder": "Data/Flica_inputs",
+    "output_dir": "Data/SBF_outputs",
+    "modalities_order": ['AMY', 'CT'],
+    "modalities_order_filetypes": ['.gz', '.mgh'],
+    "fs_path": os.getenv("FREESURFER_HOME", "/path/to/freesurfer") + "/bin/freesurfer",
+    "path_to_fsavg": os.getenv(
+        "FSAVERAGE_PATH",
+        os.path.join(os.getenv("FREESURFER_HOME", "/path/to/freesurfer"), "subjects", "fsaverage"),
+    ),
+    "fsl_path": os.getenv("FSLDIR", "/path/to/fsl") + "/",
     "dropout": 0.2,
     "device": "cpu",
     "auto_weight": [1,1,1,1],
     "lambdas": [.5,.5,.5,.5],
     "nlat": 50,
     "lr": 0.05,
-    "random_seed": 555,
+    "random_seed": 42,
     "maxiter": 30,
     "batch_size": 32,
     "init_method": "random",
@@ -129,9 +139,13 @@ for opt_filetype in opts["modalities_order_filetypes"]:
             # If a match is found, append the corresponding header to the list
             # SBFOut_headers.append(img_info["header"][index]) # YC commented
             modality_key = modalities[index] # YC added
-
-            SBFOut_headers.append(img_info["header"][modality_key]) # YC added
-            SBFOut_affine.append(img_info['affine'][modality_key]) # YC added
+            if opt_filetype == '.dtseries.nii':
+                # CIFTI outputs use stored axes; no NIfTI header/affine needed here.
+                SBFOut_headers.append(None)
+                SBFOut_affine.append(None)
+            else:
+                SBFOut_headers.append(img_info["header"][modality_key]) # YC added
+                SBFOut_affine.append(img_info['affine'][modality_key]) # YC added
 
             break
 

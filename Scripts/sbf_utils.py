@@ -77,7 +77,8 @@ class loss_SuperBigFLICA_regression(nn.Module):
             
         y_train = y_train.squeeze(1)  # LN added to remove unnecessary singleton dimension in y_train
         index_NaN = torch.isnan(y_train)
-        y_train[index_NaN] = y_pred[index_NaN]
+        if index_NaN.any():
+            y_train[index_NaN] = y_pred[index_NaN]
         
         diff2 = (y_train - y_pred)**2 / sigma3**2 / 2
         loss_mse = torch.mean(diff2) + torch.sum(torch.log(sigma3 +1))
@@ -215,6 +216,13 @@ def SupervisedFLICA(x_train, y_train, nlat, x_test, y_test, Data_test, output_di
                     auto_weight=[1,1,1,1], lambdas=[0.25, 0.25, 0.25, 0.25],
                     lr=0.001, batch_size=512, maxiter=50, dicl_dim=100):
 
+    y_train = np.atleast_2d(y_train)
+    y_test = np.atleast_2d(y_test)
+    if y_train.shape[0] == 1 and y_train.shape[1] > 1:
+        y_train = y_train.T
+    if y_test.shape[0] == 1 and y_test.shape[1] > 1:
+        y_test = y_test.T
+
     torch.manual_seed(random_seed)
     torch.cuda.manual_seed_all(random_seed)
     np.random.seed(random_seed)
@@ -249,7 +257,7 @@ def SupervisedFLICA(x_train, y_train, nlat, x_test, y_test, Data_test, output_di
     y_test = (y_test - y_mean) / y_stds
 
     print('Done...')
-    set_random_seeds()
+    set_random_seeds(seed=random_seed)
 
     train_dataset = load_Multimodal_data(X=x_train, y=y_train)
     train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True)
@@ -353,13 +361,19 @@ def SupervisedFLICA(x_train, y_train, nlat, x_test, y_test, Data_test, output_di
 
             for ij in range(y_test1.shape[1]):
                 if np.sum(idx_nonnan[:, ij]) >= 10:
-                    pred_valid = pred_test.astype(np.float64).flatten()
-                    y_valid = y_test1.astype(np.float64).flatten()
+                    pred_valid = pred_test[:, ij].astype(np.float64)
+                    y_valid = y_test1[:, ij].astype(np.float64)
                     if np.isnan(pred_valid).any() or np.isnan(y_valid).any():
                         valid_mask = ~np.isnan(pred_valid) & ~np.isnan(y_valid)
                         pred_valid = pred_valid[valid_mask]
                         y_valid = y_valid[valid_mask]
-                    corr_test1[ij] = scipy.stats.pearsonr(pred_valid, y_valid)[0]
+                    if pred_valid.size >= 2 and y_valid.size >= 2:
+                        corr_test1[ij] = scipy.stats.pearsonr(pred_valid, y_valid)[0]
+                    else:
+                        print(
+                            f"Warning: skipping pearsonr for target {ij} due to insufficient valid points "
+                            f"(n={pred_valid.size})."
+                        )
 
             corr_test = np.nansum(corr_test1[corr_test1 > 0.1]) if y_test.shape[1] > 1 else np.nanmean(corr_test1)
             test_MAE = np.mean(np.abs(pred_test[idx_nonnan].flatten() - y_test[idx_nonnan].flatten()))
@@ -474,6 +488,12 @@ class load_Multimodal_data(Dataset):
                 return image
 
 def get_model_param(x_train, x_test, y_train, y_test, best_model, get_sp_load=1):
+    y_train = np.atleast_2d(y_train)
+    y_test = np.atleast_2d(y_test)
+    if y_train.shape[0] == 1 and y_train.shape[1] > 1:
+        y_train = y_train.T
+    if y_test.shape[0] == 1 and y_test.shape[1] > 1:
+        y_test = y_test.T
     nmod = len(x_train)
     best_model.eval()
     modality_weights = F.softmax(torch.Tensor.cpu(best_model.mod_weight), dim=1).detach().numpy()
@@ -538,6 +558,15 @@ def sKPCR_regression(X, Y, cov):
 
 
 def SBF_load(opts, behavioral_train, behavioral_test, behavioral_validation):
+    behavioral_train = np.atleast_2d(behavioral_train)
+    behavioral_test = np.atleast_2d(behavioral_test)
+    behavioral_validation = np.atleast_2d(behavioral_validation)
+    if behavioral_train.shape[0] == 1 and behavioral_train.shape[1] > 1:
+        behavioral_train = behavioral_train.T
+    if behavioral_test.shape[0] == 1 and behavioral_test.shape[1] > 1:
+        behavioral_test = behavioral_test.T
+    if behavioral_validation.shape[0] == 1 and behavioral_validation.shape[1] > 1:
+        behavioral_validation = behavioral_validation.T
     allowed_modalities = opts.get('modalities_order', [])
     data_directories = [os.path.join(opts['brain_data_main_folder'], d) for d in os.listdir(opts['brain_data_main_folder']) if os.path.isdir(os.path.join(opts['brain_data_main_folder'], d))]
     data_directories = [d for d in data_directories if any((modality in os.path.basename(d) for modality in allowed_modalities))]
@@ -550,7 +579,9 @@ def SBF_load(opts, behavioral_train, behavioral_test, behavioral_validation):
         sub_files = os.listdir(data_directories[folders])
         for files in range(len(sub_files)):
             fileName, fileExtension = os.path.splitext(sub_files[files])
-            if fileExtension == '.gz' or fileExtension == '.mgh' or fileExtension == '.txt':
+            if sub_files[files].endswith('.dtseries.nii'):
+                paths2data[folders] = os.path.join(data_directories[folders], sub_files[files])
+            elif fileExtension == '.gz' or fileExtension == '.mgh' or fileExtension == '.txt':
                 paths2data[folders] = os.path.join(data_directories[folders], sub_files[files])
     list_of_arrays = [np.array(a) for a in range(0, len(paths2data))]
     print(list_of_arrays)
@@ -566,6 +597,8 @@ def SBF_load(opts, behavioral_train, behavioral_test, behavioral_validation):
     shapes = {}
     affine = {}
     header = {}
+    cifti_brain_axes = {}
+    cifti_nifti_headers = {}
     valid_train = ~pd.isna(behavioral_train).any(axis=1)
     n_removed_train = np.sum(~valid_train)
     valid_train = np.asarray(valid_train).ravel()
@@ -578,6 +611,8 @@ def SBF_load(opts, behavioral_train, behavioral_test, behavioral_validation):
     for i in range(0, len(paths2data)):
         print('i = ', i)
         fileName, fileExtension = os.path.splitext(paths2data[i])
+        if paths2data[i].endswith('.dtseries.nii'):
+            fileExtension = '.dtseries.nii'
         print('loading data from modality number', i + 1, '=', fileName)
         filetypes[i] = fileExtension
         names[i] = fileName
@@ -638,6 +673,20 @@ def SBF_load(opts, behavioral_train, behavioral_test, behavioral_validation):
             mask_mgh = mask[i]
             Data_Modality[i] = data2d[np.argwhere(mask[i][:] != 0)[:, 0], :]
             del data2d
+        elif fileExtension == '.dtseries.nii':
+            img = nib.load(paths2data[i])
+            if not isinstance(img, nib.Cifti2Image):
+                raise TypeError(f"Expected Cifti2Image for {paths2data[i]}")
+            data = img.get_fdata()
+            if data.ndim != 2:
+                raise ValueError(f"Expected 2D dtseries data, got shape {data.shape}")
+            Data_Modality[i] = data.T
+            modality_name = os.path.basename(os.path.dirname(paths2data[i]))
+            base_modality = clean_modality_name(modality_name)
+            modality_key = base_modality + '_train'
+            cifti_brain_axes[modality_key] = img.header.get_axis(1)
+            cifti_nifti_headers[modality_key] = img.nifti_header.copy()
+            print('dtseries data shape (brain x time): ', Data_Modality[i].shape)
         if '_Train_' in fileName:
             print(f'Training group: Removing {n_removed_train} subjects with missing behavioral data.')
             Data_Modality[i] = Data_Modality[i][:, valid_train]
@@ -647,6 +696,7 @@ def SBF_load(opts, behavioral_train, behavioral_test, behavioral_validation):
         elif '_Validation_' in fileName:
             print(f'Validation group: Removing {n_removed_validation} subjects with missing behavioral data.')
             Data_Modality[i] = Data_Modality[i][:, valid_validation]
+
     behavioral_train = behavioral_train[valid_train, :]
     behavioral_test = behavioral_test[valid_test, :]
     behavioral_validation = behavioral_validation[valid_validation, :]
@@ -663,7 +713,7 @@ def SBF_load(opts, behavioral_train, behavioral_test, behavioral_validation):
         masks_for_SBF_outputs['mask_for_mgh'] = mask_mgh
     if 'mask_gz' in locals():
         masks_for_SBF_outputs['mask_for_gz'] = mask_gz
-    fileinfo = {'data_directories': data_directories, 'masks_for_SBF_inputs': masks_for_SBF_inputs, 'scaling_data_transform': scaling_data_transform, 'filetype': filetypes, 'names': names, 'affine': affine, 'header': header, 'shapes': shapes, 'masks_for_SBF_outputs': masks_for_SBF_outputs, 'behavioral_data': {'train': behavioral_train, 'test': behavioral_test, 'validation': behavioral_validation}}
+    fileinfo = {'data_directories': data_directories, 'masks_for_SBF_inputs': masks_for_SBF_inputs, 'scaling_data_transform': scaling_data_transform, 'filetype': filetypes, 'names': names, 'affine': affine, 'header': header, 'shapes': shapes, 'masks_for_SBF_outputs': masks_for_SBF_outputs, 'cifti_brain_axes': cifti_brain_axes, 'cifti_nifti_headers': cifti_nifti_headers, 'behavioral_data': {'train': behavioral_train, 'test': behavioral_test, 'validation': behavioral_validation}}
     return (Data_Modality, fileinfo, modalities)
 
 def rms(IN, dim, options):
@@ -681,6 +731,7 @@ def SBF_save_everything(output_dir, spatial_loadings, img_info, opts, dictionari
         file_extension = opts['modalities_order_filetypes'][k]
         D = dictionaries[k]
         z_map_voxels = np.dot(D, z_map_dict)
+        z_map_voxels = np.asarray(z_map_voxels)
         if file_extension == '.gz':
             modality_name = opts['modalities_order'][k]
             out_file_name = '/SBFOut_' + modality_name + '.nii.gz'
@@ -719,6 +770,26 @@ def SBF_save_everything(output_dir, spatial_loadings, img_info, opts, dictionari
             outname = output_dir + out_file_name_rh
             out_right = np.nan_to_num(out_right, nan=0.0)
             img2save = nib.freesurfer.mghformat.MGHImage(out_right, affine=opts['SBFOut_affine'][k], header=opts['SBFOut_headers'][k], extra=None, file_map=None)
+            nib.save(img2save, outname)
+        if file_extension == '.dtseries.nii':
+            modality_name = opts['modalities_order'][k]
+            modality_key = modality_name + '_train'
+            out_file_name = '/SBFOut_' + modality_name + '.dtseries.nii'
+            if modality_key not in img_info['cifti_brain_axes']:
+                raise ValueError(f"CIFTI axis information not found for modality '{modality_key}'.")
+            brain_axis = img_info['cifti_brain_axes'][modality_key]
+            # Use a synthetic SeriesAxis to satisfy dtseries requirements.
+            series_axis = nib.cifti2.cifti2_axes.SeriesAxis(
+                start=0.0,
+                step=1.0,
+                size=z_map_voxels.shape[1],
+                unit='SECOND',
+            )
+            new_header = nib.cifti2.cifti2_axes.to_header((series_axis, brain_axis))
+            nifti_header = img_info['cifti_nifti_headers'].get(modality_key)
+            data = z_map_voxels.T
+            img2save = nib.Cifti2Image(data, header=new_header, nifti_header=nifti_header)
+            outname = output_dir + out_file_name
             nib.save(img2save, outname)
     return spatial_loadings
 
