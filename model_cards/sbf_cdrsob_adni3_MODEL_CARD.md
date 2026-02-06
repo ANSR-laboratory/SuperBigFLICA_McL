@@ -9,7 +9,7 @@
 - **Implementation:** Python 3.9, PyTorch 2.1.2  
 - **Contact:**  
   - Lily Cheng (ycheng23@mgh.harvard.edu)  
-  - Lisa Nickerson (lisa_nickerson@hms.harvard.edu)  
+  - Lisa Nickerson (lnickerson@mclean.harvard.edu)  
 - **License:** Research use only  
 
 ---
