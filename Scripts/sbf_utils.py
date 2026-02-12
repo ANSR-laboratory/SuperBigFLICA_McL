@@ -262,6 +262,9 @@ def SupervisedFLICA(x_train, y_train, nlat, x_test, y_test, Data_test, output_di
 
     train_dataset = load_Multimodal_data(X=x_train, y=y_train)
     train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True)
+    train_loader_eval = None
+    if save_all_epochs:
+        train_loader_eval = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=False)
     test_dataset = load_Multimodal_data(X=x_test, y=y_test)
     test_loader = DataLoader(dataset=test_dataset, batch_size=batch_size, shuffle=False)
 
@@ -365,6 +368,18 @@ def SupervisedFLICA(x_train, y_train, nlat, x_test, y_test, Data_test, output_di
                     pred_test = np.vstack((pred_test, torch.Tensor.cpu(pred_all1).detach().numpy()))
                     lat_test_all = np.vstack((lat_test_all, torch.Tensor.cpu(lat_test).detach().numpy()))
 
+            lat_train_all = None
+            if save_all_epochs and train_loader_eval is not None:
+                for batch_idx, (data_batch, _) in enumerate(train_loader_eval):
+                    for i in range(nmod):
+                        data_batch[i] = data_batch[i].to(device)
+                    recon_train, spatial_loadings, lat_train, pred_all, weight_pred = model(x=data_batch, device=device)
+                    lat_np = torch.Tensor.cpu(lat_train).detach().numpy()
+                    if batch_idx == 0:
+                        lat_train_all = lat_np
+                    else:
+                        lat_train_all = np.vstack((lat_train_all, lat_np))
+
             idx_nonnan = np.isnan(y_test) == 0
             corr_test1 = np.zeros((y_test.shape[1],))
 
@@ -414,6 +429,12 @@ def SupervisedFLICA(x_train, y_train, nlat, x_test, y_test, Data_test, output_di
                         os.makedirs(maps_dir, exist_ok=True)
                         spatial_loadings_np = [sl.detach().cpu().numpy() for sl in model.spatial_loading]
                         SBF_save_everything(maps_dir, spatial_loadings_np, img_info, opts, dictionaries)
+                    if lat_train_all is not None:
+                        np.save(os.path.join(epoch_dir, "lat_train.npy"), lat_train_all)
+                        np.savetxt(os.path.join(epoch_dir, "lat_train.csv"), lat_train_all, delimiter=',')
+                    if 'lat_test_all' in locals():
+                        np.save(os.path.join(epoch_dir, "lat_validation.npy"), lat_test_all)
+                        np.savetxt(os.path.join(epoch_dir, "lat_validation.csv"), lat_test_all, delimiter=',')
 
         print(f'Epoch {epoch} | Train Loss: {train_loss / len(train_loader.dataset):.6f} | '
               f'Test Loss: {test_loss / len(test_loader.dataset):.4f} | '
