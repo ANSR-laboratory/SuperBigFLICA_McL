@@ -32,9 +32,9 @@ source "$VENV_DIR/bin/activate"
 echo "Virtual environment activated: $VENV_DIR" | tee -a "$LOG_FILE"
 
 # Load required module
-module purge
-module add fsl              # Load FSL (version 6.0.7.4 assumed)
-module add freesurfer       # Load FreeSurfer (version 7.3.2 assumed)
+# module purge
+# module add fsl              # Load FSL (version 6.0.7.4 assumed)
+# module add freesurfer       # Load FreeSurfer (version 7.3.2 assumed)
 echo "Modules fsl and freesurfer loaded." | tee -a "$LOG_FILE"
 
 # Start a timer and run the Python script
