@@ -20,6 +20,23 @@ from sklearn.metrics import r2_score
 from copy import deepcopy
 import nibabel as nib
 
+def select_device():
+    forced = os.getenv("SBF_DEVICE")
+    if forced:
+        return forced
+    if torch.cuda.is_available():
+        return "cuda"
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+def load_nidp_csv(path):
+    data = np.genfromtxt(path, delimiter=",", missing_values="", filling_values=np.nan)
+    data = np.atleast_2d(data)
+    if data.shape[0] == 1 and data.shape[1] > 1:
+        data = data.T
+    return data
+
 class loss_SuperBigFLICA_regression(nn.Module):
     def __init__(self, ntask, nmod, nsub, device = 'cuda', auto_weight = [1,1,1,1], lambdas = [0.25, 0.25, 0.25, 0.25]):
         super(loss_SuperBigFLICA_regression, self).__init__()
@@ -123,7 +140,8 @@ def set_random_seeds(seed=42):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     torch.use_deterministic_algorithms(True)
@@ -225,7 +243,8 @@ def SupervisedFLICA(x_train, y_train, nlat, x_test, y_test, Data_test, output_di
         y_test = y_test.T
 
     torch.manual_seed(random_seed)
-    torch.cuda.manual_seed_all(random_seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(random_seed)
     np.random.seed(random_seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
@@ -279,6 +298,7 @@ def SupervisedFLICA(x_train, y_train, nlat, x_test, y_test, Data_test, output_di
         model = SupervisedFLICAmodel(nfea=nfea, nlat=nlat, ntask=ntask, dropout=dropout,
                                      device=device, init_spatial_loading=init_spatial_loading,
                                      init_weight_pred=init_weight_pred, init_bais_pred=init_bais_pred).to(device)
+    print(f"Model device: {next(model.parameters()).device}")
 
     loss_fun_reg = loss_SuperBigFLICA_regression(ntask=ntask, nmod=nmod, device=device, nsub=x_train[0].shape[0],
                                                  auto_weight=auto_weight, lambdas=lambdas).to(device)
@@ -308,7 +328,8 @@ def SupervisedFLICA(x_train, y_train, nlat, x_test, y_test, Data_test, output_di
 
     for epoch in range(epochs + 1):
         torch.manual_seed(epoch)
-        torch.cuda.manual_seed(epoch)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed(epoch)
         tt = time.time()
 
         model.train()
@@ -319,6 +340,8 @@ def SupervisedFLICA(x_train, y_train, nlat, x_test, y_test, Data_test, output_di
             for i in range(nmod):
                 data_batch[i] = data_batch[i].to(device)
             labels = labels.to(device)
+            if epoch == 0 and batch_idx == 0:
+                print(f"First train batch device: {data_batch[0].device}, labels: {labels.device}")
 
             optimizer.zero_grad()
             if epoch >= 10:

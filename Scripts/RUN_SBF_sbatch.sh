@@ -7,6 +7,8 @@
 #SBATCH --mem=100G                     # Memory requirement (increased based on observed utilization)
 #SBATCH --mail-type=ALL                # Email notifications for job start, end, and failure
 #SBATCH --mail-user=ycheng23@mgh.harvard.com
+#SBATCH --partition=defq
+#SBATCH --gres=gpu:1
 
 # Set up output directory
 BASE_OUTPUT_DIR="/data/qnilab/AD_NPS_R01_2022/ADNI_Data_Fusion/SBF_Outputs/SBF_ADNI_CDR/CDRSB" # Replace with your desired directory for output
@@ -31,11 +33,20 @@ VENV_DIR="/data/qnilab/AD_NPS_R01_2022/ADNI_Data_Fusion/.myenv"
 source "$VENV_DIR/bin/activate"
 echo "Virtual environment activated: $VENV_DIR" | tee -a "$LOG_FILE"
 
-# Load required module
-# module purge
-# module add fsl              # Load FSL (version 6.0.7.4 assumed)
-# module add freesurfer       # Load FreeSurfer (version 7.3.2 assumed)
-echo "Modules fsl and freesurfer loaded." | tee -a "$LOG_FILE"
+# Load required module (only when module command exists)
+if command -v module >/dev/null 2>&1; then
+  module purge
+  module add fsl              # Load FSL (version 6.0.7.4 assumed)
+  module add freesurfer       # Load FreeSurfer (version 7.3.2 assumed)
+  module add shared
+  module add cuda11.8/toolkit/11.8.0
+  echo "Modules fsl, freesurfer, cuda loaded." | tee -a "$LOG_FILE"
+else
+  echo "Module command not found; skipping module loads." | tee -a "$LOG_FILE"
+fi
+
+# Required for deterministic CuBLAS behavior when torch.use_deterministic_algorithms(True)
+export CUBLAS_WORKSPACE_CONFIG=:4096:8
 
 # Start a timer and run the Python script
 SECONDS=0  # Initialize a timer
