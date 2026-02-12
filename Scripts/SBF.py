@@ -18,18 +18,9 @@ print("Loading the non-imaging data and non-imaging targets for prediction")
 # Change the paths to point to your non-imaging data matrices in CSV format, all superfluous columns (like subject ID) removed, no NANs
 # Data train and data validation are fed into SuperBigFLICA, data test is fed into get_model_param.py to apply the model from SBF to your new data
 
-def _load_nidp_csv(path):
-    # Allow empty cells; downstream filtering will handle missing values.
-    data = np.genfromtxt(path, delimiter=",", missing_values="", filling_values=np.nan)
-    data = np.atleast_2d(data)
-    if data.shape[0] == 1 and data.shape[1] > 1:
-        data = data.T
-    return data
-
-
-nIDPs_train = _load_nidp_csv('../forKayla/nIDPs_train_totalMJ.csv')
-nIDPs_validation = _load_nidp_csv('../forKayla/nIDPs_validation_totalMJ.csv')
-nIDPs_test = _load_nidp_csv('../forKayla/nIDPs_test_totalMJ.csv')
+nIDPs_train = sbf_utils.load_nidp_csv('../forKayla/nIDPs_train_totalMJ.csv')
+nIDPs_validation = sbf_utils.load_nidp_csv('../forKayla/nIDPs_validation_totalMJ.csv')
+nIDPs_test = sbf_utils.load_nidp_csv('../forKayla/nIDPs_test_totalMJ.csv')
 
 
 nIDPs_train_npy = nIDPs_train
@@ -59,7 +50,7 @@ opts = {
     ),
     "fsl_path": os.getenv("FSLDIR", "/path/to/fsl") + "/",
     "dropout": 0.2,
-    "device": "cpu",
+    "device": sbf_utils.select_device(),
     "auto_weight": [1,1,1,1],
     "lambdas": [.5,.5,.5,.5],
     "nlat": 50,
