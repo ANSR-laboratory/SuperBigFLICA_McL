@@ -19,16 +19,17 @@ print("Loading the non-imaging data and non-imaging targets for prediction")
 # Data train and data validation are fed into SuperBigFLICA, data test is fed into get_model_param.py to apply the model from SBF to your new data
 
 def _load_nidp_csv(path):
-    data = np.loadtxt(path, delimiter=",")
+    # Allow empty cells; downstream filtering will handle missing values.
+    data = np.genfromtxt(path, delimiter=",", missing_values="", filling_values=np.nan)
     data = np.atleast_2d(data)
     if data.shape[0] == 1 and data.shape[1] > 1:
         data = data.T
     return data
 
 
-nIDPs_train = _load_nidp_csv('Data/Flica_inputs/nIDP_CDRSB_matrix_training.csv')
-nIDPs_validation = _load_nidp_csv('Data/Flica_inputs/nIDP_CDRSB_matrix_validation.csv')
-nIDPs_test = _load_nidp_csv('Data/Flica_inputs/nIDP_CDRSB_matrix_test.csv')
+nIDPs_train = _load_nidp_csv('../forKayla/nIDPs_train_totalMJ.csv')
+nIDPs_validation = _load_nidp_csv('../forKayla/nIDPs_validation_totalMJ.csv')
+nIDPs_test = _load_nidp_csv('../forKayla/nIDPs_test_totalMJ.csv')
 
 
 nIDPs_train_npy = nIDPs_train
@@ -37,18 +38,20 @@ nIDPs_test_npy = nIDPs_test
 
 # Change the column indexes to pick out the variables for training (e.g., in the train dataset, and the target(s) in the test/validation datasets
 indices_to_include = 0
-nIDPs_test_targets = nIDPs_test_npy[:, [indices_to_include]]  # keep as column vector
-nIDPs_train_set = nIDPs_train_npy[:, [indices_to_include]]
-nIDPs_validation_targets = nIDPs_validation_npy[:, [indices_to_include]]
+if np.isscalar(indices_to_include):
+    indices_to_include = [int(indices_to_include)]
+nIDPs_test_targets = nIDPs_test_npy[:, indices_to_include]
+nIDPs_train_set = nIDPs_train_npy[:, indices_to_include]
+nIDPs_validation_targets = nIDPs_validation_npy[:, indices_to_include]
 
 
 # Create opts, which is a dictionary of options, filled in with your specific paths, modalities and SBF parameters to execute the SBF data fusion and validation in unseen dataset.
 
 opts = {
-    "brain_data_main_folder": "Data/Flica_inputs",
+    "brain_data_main_folder": "../forKayla",
     "output_dir": "Data/SBF_outputs",
-    "modalities_order": ['AMY', 'CT'],
-    "modalities_order_filetypes": ['.gz', '.mgh'],
+    "modalities_order": ['RF14', 'CT', 'PSA'],
+    "modalities_order_filetypes": ['.gz', '.dtseries.nii', '.dtseries.nii'],
     "fs_path": os.getenv("FREESURFER_HOME", "/path/to/freesurfer") + "/bin/freesurfer",
     "path_to_fsavg": os.getenv(
         "FSAVERAGE_PATH",
@@ -65,7 +68,8 @@ opts = {
     "maxiter": 30,
     "batch_size": 32,
     "init_method": "random",
-    "dicl_dim": 250
+    "dicl_dim": 250,
+    "save_all_epochs": True
 }
 
 # Specify folder for data and for SBF outputs
@@ -216,7 +220,10 @@ random_seed = opts["random_seed"],
 maxiter = opts["maxiter"], 
 batch_size = opts["batch_size"], 
 init_method = opts["init_method"],
-dicl_dim = opts["dicl_dim"])
+dicl_dim = opts["dicl_dim"],
+save_all_epochs = opts.get("save_all_epochs", False),
+img_info = img_info,
+opts = opts)
 
 print("Saving SBF Model Outputs")
 outdir = opts["output_dir"]

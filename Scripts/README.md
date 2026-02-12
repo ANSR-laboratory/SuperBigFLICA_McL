@@ -17,3 +17,7 @@ python SBF.py
 ```bash
 sbatch RUN_SBF_sbatch.sh
 ```
+
+## Notes
+- `SBF.py` uses `np.genfromtxt` to load CSVs and allows empty cells (filled as `NaN`), which are filtered during processing.
+- Set `save_all_epochs` in `SBF.py` to `True` to save per-epoch correlation metrics and spatial maps under `output_dir/epoch_details`.

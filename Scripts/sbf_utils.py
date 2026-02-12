@@ -214,7 +214,8 @@ class SupervisedFLICAmodel(nn.Module):
 def SupervisedFLICA(x_train, y_train, nlat, x_test, y_test, Data_test, output_dir, random_seed=666,
                     train_ind=None, init_method='random', dropout=0.25, device='cpu',
                     auto_weight=[1,1,1,1], lambdas=[0.25, 0.25, 0.25, 0.25],
-                    lr=0.001, batch_size=512, maxiter=50, dicl_dim=100):
+                    lr=0.001, batch_size=512, maxiter=50, dicl_dim=100,
+                    save_all_epochs=False, img_info=None, opts=None):
 
     y_train = np.atleast_2d(y_train)
     y_test = np.atleast_2d(y_test)
@@ -291,6 +292,16 @@ def SupervisedFLICA(x_train, y_train, nlat, x_test, y_test, Data_test, output_di
     loss_all_train = []
     loss_all_test = np.zeros((maxiter, 4))
     best_corr = -1
+    save_all_epochs = bool(save_all_epochs)
+    epoch_details_dir = None
+    if save_all_epochs and output_dir:
+        epoch_details_dir = os.path.join(output_dir, "epoch_details")
+        os.makedirs(epoch_details_dir, exist_ok=True)
+    can_save_maps = save_all_epochs and (img_info is not None) and (opts is not None)
+    if save_all_epochs and not can_save_maps:
+        print("Warning: save_all_epochs=True but img_info/opts not provided; spatial maps will not be saved each epoch.")
+    corr_per_target_all = []
+    corr_sum_all = []
 
     for epoch in range(epochs + 1):
         torch.manual_seed(epoch)
@@ -388,10 +399,34 @@ def SupervisedFLICA(x_train, y_train, nlat, x_test, y_test, Data_test, output_di
             loss_all_test[epoch - 1, 2] = test_l3.cpu().numpy()
             loss_all_test[epoch - 1, 3] = test_l4.cpu().numpy()
 
+            if save_all_epochs:
+                corr_per_target_all.append(corr_test1.copy())
+                corr_sum_all.append(corr_test)
+                if epoch_details_dir is not None:
+                    epoch_dir = os.path.join(epoch_details_dir, f"epoch_{epoch:03d}")
+                    os.makedirs(epoch_dir, exist_ok=True)
+                    np.savetxt(os.path.join(epoch_dir, "corr_per_target.csv"),
+                               corr_test1[None, :], delimiter=',')
+                    with open(os.path.join(epoch_dir, "corr_sum.txt"), "w") as f:
+                        f.write(str(corr_test))
+                    if can_save_maps:
+                        maps_dir = os.path.join(epoch_dir, "spatial_maps")
+                        os.makedirs(maps_dir, exist_ok=True)
+                        spatial_loadings_np = [sl.detach().cpu().numpy() for sl in model.spatial_loading]
+                        SBF_save_everything(maps_dir, spatial_loadings_np, img_info, opts, dictionaries)
+
         print(f'Epoch {epoch} | Train Loss: {train_loss / len(train_loader.dataset):.6f} | '
               f'Test Loss: {test_loss / len(test_loader.dataset):.4f} | '
               f'Test MAE: {test_MAE:.4f} | '
               f'Test Corr (Sum r>0.1): {corr_test:.4f} | Time: {time.time() - tt:.2f}s')
+
+    if save_all_epochs and epoch_details_dir is not None and corr_per_target_all:
+        corr_per_target_arr = np.vstack(corr_per_target_all)
+        epoch_idx = np.arange(corr_per_target_arr.shape[0])[:, None]
+        np.savetxt(os.path.join(epoch_details_dir, "corr_per_target_all_epochs.csv"),
+                   np.hstack([epoch_idx, corr_per_target_arr]), delimiter=',')
+        np.savetxt(os.path.join(epoch_details_dir, "corr_sum_all_epochs.csv"),
+                   np.column_stack([epoch_idx, np.array(corr_sum_all)]), delimiter=',')
 
     best_model.to('cpu')
     last_model = model.to('cpu')
@@ -632,7 +667,7 @@ def SBF_load(opts, behavioral_train, behavioral_test, behavioral_validation):
             mask_gz = MNI_mask
             del img
         elif fileExtension == '.txt':
-            Data_Modality[i] = np.loadtxt(paths2data[i])
+            Data_Modality[i] = np.genfromtxt(paths2data[i], missing_values="", filling_values=np.nan)
         elif fileExtension == '.mgh':
             fs_path = opts['fs_path']
             direct = os.path.dirname(paths2data[i])
