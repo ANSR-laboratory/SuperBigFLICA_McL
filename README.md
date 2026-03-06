@@ -12,7 +12,7 @@
 
 ## Citation
 
-SuperBigFLICA builds on the supervised BigFLICA framework introduced in:
+SuperBigFLICA was originally proposed in:
 
 ```bibtex
 @article{gong2023supervised,
@@ -27,7 +27,7 @@ SuperBigFLICA builds on the supervised BigFLICA framework introduced in:
 }
 ```
 
-If you use SuperBigFLICA in your research, please also cite:
+If you use this codebase in your research, please also cite:
 
 ```bibtex
 @article{cheng2025sbf,
