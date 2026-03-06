@@ -1,50 +1,74 @@
-# Supervised Big-data FMRIB’s Linked Independent Component Analysis (SuperBigFLICA)
+# SuperBigFLICA (SBF)
 
-SuperBigFLICA is a semi-supervised, multi-modal data fusion framework designed to extract interpretable spatial components from neuroimaging data while jointly predicting clinical outcomes. This implementation supports multimodal brain imaging analysis and is tailored for studies in aging, dementia, and related neurological conditions.
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![medRxiv](https://img.shields.io/badge/medRxiv-2025.12.11.25341830-blue)](https://www.medrxiv.org/content/10.64898/2025.12.11.25341830v1)
 
-## Features
+> **Semi-supervised multimodal neuroimaging data fusion** that simultaneously learns interpretable spatial brain components and predicts clinical outcomes — enabling both discovery and prediction from multi-modal brain imaging data.
 
-- **Blends multiple brain‑scan types in one model** – MRI, fMRI, DTI or other measures can be analysed together.
-- **Finds common patterns across people** – the code learns a small set of “scores” for each participant that capture how strongly they show those brain patterns.
-- **Predicts clinical or behavioural outcomes at the same time** – training is guided both by how well the scans are reconstructed and how well the model forecasts the target variable (e.g., symptom severity).
-- **Keeps a separate map for each scan type** – you still get modality‑specific brain maps that are easy to visualize.
-- **Flexible and hardware‑friendly** – adjustable hyper‑parameters, runs on CPU or GPU, and includes ready‑made dataset and training utilities.
+<p align="center">
+  <img src="figures/overview.png" width="85%" alt="SuperBigFLICA overview">
+</p>
 
-## File Structure
+## Citation
 
-- `SBF.py`: Main training and testing script for the SuperBigFLICA model
-- `sbf_utils.py`: Supporting functions
-  
-## Requirements
+SuperBigFLICA builds on the supervised BigFLICA framework introduced in:
 
-- Linux cluster (tested): Python ≥ 3.11 (tested with 3.11.9) and `requirements.txt`
-- macOS: use `requirements.macos.txt` (compatible with Python 3.10+)
+```bibtex
+@article{gong2023supervised,
+  title={Supervised Phenotype Discovery From Multimodal Brain Imaging},
+  author={Gong, Weikang and Bai, Shuang and Zheng, Yong-Qiang and Smith, Stephen M. and Beckmann, Christian F.},
+  journal={IEEE Transactions on Medical Imaging},
+  volume={42},
+  number={3},
+  pages={834--849},
+  year={2023},
+  doi={10.1109/TMI.2022.3218720}
+}
+```
 
-## Getting Started
+If you use SuperBigFLICA in your research, please also cite:
 
-1. **Install dependencies:**
+```bibtex
+@article{cheng2025sbf,
+  title={Investigating the Amyloid-Tau-Neurodegeneration Framework in Alzheimer's Disease Using Semi-Supervised Multimodal Imaging Data Fusion},
+  author={Cheng, You and Medina, Adri{\'a}n and Korponay, Cole and Beckmann, Christian F. and Harper, David and Nickerson, Lisa and {Alzheimer's Disease Neuroimaging Initiative}},
+  journal={medRxiv},
+  year={2025},
+  doi={10.64898/2025.12.11.25341830},
+  url={https://www.medrxiv.org/content/10.64898/2025.12.11.25341830v1}
+}
+```
 
-   ```bash
-   pip install -r requirements.txt
-   ```
+## Quick Start
 
-   macOS:
+```bash
+# Clone the repository
+git clone https://github.com/ANSR-laboratory/SuperBigFLICA_McL.git
+cd SuperBigFLICA_McL
 
-   ```bash
-   pip install -r requirements.macos.txt
-   ```
+# Install dependencies
+pip install -r requirements.txt         # Linux (Python ≥ 3.11)
+pip install -r requirements.macos.txt   # macOS (Python ≥ 3.10)
 
-2. **Set environment variables (required for FSL/FreeSurfer paths):**
+# Configure paths and parameters in Scripts/SBF.py, then run:
+python Scripts/SBF.py
+```
 
-   ```bash
-   export FSLDIR=/path/to/fsl
-   export FREESURFER_HOME=/path/to/freesurfer
-   export FSAVERAGE_PATH=/path/to/fsaverage
-   ```
+## Project Structure
 
-## Model Cards
+```
+SuperBigFLICA_McL/
+├── Scripts/                # Main scripts (SBF.py, sbf_utils.py, RUN_SBF_sbatch.sh)
+├── Data/                   # Input data folder
+├── figures/                # Overview figures
+├── Slides/                 # Presentation materials
+├── Visualizations/         # Output visualization utilities
+├── model_cards/            # Documentation for trained models
+├── requirements.txt        # Linux dependencies
+└── requirements.macos.txt  # macOS dependencies
+```
 
-Detailed documentation for trained models is available under [`model_cards/`](model_cards/):
+## License
 
-- [ADNI-3: Predicting CDR-SOB](model_cards/sbf_cdrsob_adni3_MODEL_CARD.md)
-- HCP: Delayed discounting (coming)
+This project is licensed under the MIT License — see [LICENSE](LICENSE) for details.
