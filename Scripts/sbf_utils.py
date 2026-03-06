@@ -140,8 +140,7 @@ def set_random_seeds(seed=42):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
+    torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     torch.use_deterministic_algorithms(True)
@@ -262,6 +261,7 @@ def SupervisedFLICA(x_train, y_train, nlat, x_test, y_test, Data_test, output_di
     nfea = [x.shape[1] for x in x_train]
 
     is_norm = True
+    norm_stats = []
     if is_norm:
         for i in range(len(x_train)):
             x_mean = x_train[i].mean(axis=0)
@@ -270,6 +270,7 @@ def SupervisedFLICA(x_train, y_train, nlat, x_test, y_test, Data_test, output_di
             x_stds[x_stds == 0] = epsilon
             x_train[i] = (x_train[i] - x_mean) / x_stds
             x_test[i] = (x_test[i] - x_mean) / x_stds
+            norm_stats.append((x_mean, x_stds))
 
     y_mean = np.nanmean(y_train, axis=0)
     y_stds = np.nanstd(y_train, axis=0)
@@ -325,6 +326,7 @@ def SupervisedFLICA(x_train, y_train, nlat, x_test, y_test, Data_test, output_di
         print("Warning: save_all_epochs=True but img_info/opts not provided; spatial maps will not be saved each epoch.")
     corr_per_target_all = []
     corr_sum_all = []
+    epoch_state_dicts = []
 
     for epoch in range(epochs + 1):
         torch.manual_seed(epoch)
@@ -440,12 +442,13 @@ def SupervisedFLICA(x_train, y_train, nlat, x_test, y_test, Data_test, output_di
             if save_all_epochs:
                 corr_per_target_all.append(corr_test1.copy())
                 corr_sum_all.append(corr_test)
+                epoch_state_dicts.append(copy.deepcopy(model.state_dict()))
                 if epoch_details_dir is not None:
                     epoch_dir = os.path.join(epoch_details_dir, f"epoch_{epoch:03d}")
                     os.makedirs(epoch_dir, exist_ok=True)
-                    np.savetxt(os.path.join(epoch_dir, "corr_per_target.csv"),
+                    np.savetxt(os.path.join(epoch_dir, "corr_per_target_validation.csv"),
                                corr_test1[None, :], delimiter=',')
-                    with open(os.path.join(epoch_dir, "corr_sum.txt"), "w") as f:
+                    with open(os.path.join(epoch_dir, "corr_sum_validation.txt"), "w") as f:
                         f.write(str(corr_test))
                     if can_save_maps:
                         maps_dir = os.path.join(epoch_dir, "spatial_maps")
@@ -458,6 +461,10 @@ def SupervisedFLICA(x_train, y_train, nlat, x_test, y_test, Data_test, output_di
                     if 'lat_test_all' in locals():
                         np.save(os.path.join(epoch_dir, "lat_validation.npy"), lat_test_all)
                         np.savetxt(os.path.join(epoch_dir, "lat_validation.csv"), lat_test_all, delimiter=',')
+                    pred_weights_np = model.weight_pred.detach().cpu().numpy()
+                    mod_weights_np = F.softmax(model.mod_weight, dim=1).detach().cpu().numpy()
+                    np.savetxt(os.path.join(epoch_dir, "prediction_weights.csv"), pred_weights_np, delimiter=',')
+                    np.savetxt(os.path.join(epoch_dir, "modality_weights.csv"), mod_weights_np, delimiter=',')
 
         print(f'Epoch {epoch} | Train Loss: {train_loss / len(train_loader.dataset):.6f} | '
               f'Test Loss: {test_loss / len(test_loader.dataset):.4f} | '
@@ -471,6 +478,29 @@ def SupervisedFLICA(x_train, y_train, nlat, x_test, y_test, Data_test, output_di
                    np.hstack([epoch_idx, corr_per_target_arr]), delimiter=',')
         np.savetxt(os.path.join(epoch_details_dir, "corr_sum_all_epochs.csv"),
                    np.column_stack([epoch_idx, np.array(corr_sum_all)]), delimiter=',')
+
+        # Post-hoc: apply each epoch's saved model to Data_test (no test data touched during training)
+        if norm_stats and epoch_state_dicts:
+            print("Running post-hoc test inference for each epoch...")
+            Data_test_norm = [
+                (Data_test[i] - norm_stats[i][0]) / norm_stats[i][1]
+                for i in range(len(Data_test))
+            ]
+            test_tensors = [torch.FloatTensor(m) for m in Data_test_norm]
+            model.to('cpu')
+            for ep_idx, state_dict in enumerate(epoch_state_dicts):
+                epoch_dir = os.path.join(epoch_details_dir, f"epoch_{ep_idx:03d}")
+                test_out_dir = os.path.join(epoch_dir, "test_outputs")
+                os.makedirs(test_out_dir, exist_ok=True)
+                model.load_state_dict(state_dict)
+                model.eval()
+                with torch.no_grad():
+                    _, _, lat_test_ep, pred_test_ep, _ = model(x=test_tensors, device='cpu')
+                lat_test_ep_np = lat_test_ep.detach().numpy()
+                pred_test_ep_np = pred_test_ep.detach().numpy() * y_stds + y_mean
+                np.savetxt(os.path.join(test_out_dir, "lat_test.csv"), lat_test_ep_np, delimiter=',')
+                np.savetxt(os.path.join(test_out_dir, "pred_test.csv"), pred_test_ep_np, delimiter=',')
+            print("Post-hoc test inference complete.")
 
     best_model.to('cpu')
     last_model = model.to('cpu')
@@ -711,7 +741,7 @@ def SBF_load(opts, behavioral_train, behavioral_test, behavioral_validation):
             mask_gz = MNI_mask
             del img
         elif fileExtension == '.txt':
-            Data_Modality[i] = np.genfromtxt(paths2data[i], missing_values="", filling_values=np.nan)
+            Data_Modality[i] = np.loadtxt(paths2data[i])
         elif fileExtension == '.mgh':
             fs_path = opts['fs_path']
             direct = os.path.dirname(paths2data[i])
