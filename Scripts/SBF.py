@@ -231,7 +231,7 @@ fname_fullpath = os.path.join(outdir, fname)
 np.savetxt(fname_fullpath, loss_all_test, delimiter=',')
 
 
-fname = "best_corr.txt"
+fname = "test_corr.txt"
 fname_fullpath = os.path.join(outdir, fname)
 # Write to the file using the full path
 with open(fname_fullpath, 'w') as file:
