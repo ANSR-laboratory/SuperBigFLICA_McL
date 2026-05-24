@@ -2,7 +2,7 @@
 
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![medRxiv](https://img.shields.io/badge/medRxiv-2025.12.11.25341830-blue)](https://www.medrxiv.org/content/10.64898/2025.12.11.25341830v1)
+[![Alzheimer's & Dementia](https://img.shields.io/badge/Alzheimer's%20%26%20Dementia-10.1002%2Fdad2.70360-blue)](http://dx.doi.org/10.1002/dad2.70360)
 
 > **Semi-supervised multimodal neuroimaging data fusion** that simultaneously learns interpretable spatial brain components and predicts clinical outcomes — enabling both discovery and prediction from multi-modal brain imaging data.
 
@@ -43,16 +43,16 @@ If you use this codebase in your research, please also cite:
 
 > **Investigating the Amyloid-Tau-Neurodegeneration Framework in Alzheimer's Disease Using Semi-Supervised Multimodal Imaging Data Fusion**
 > You Cheng, Adrián Medina, Cole Korponay, Christian F. Beckmann, David Harper, Lisa Nickerson, and the Alzheimer's Disease Neuroimaging Initiative
-> *medRxiv*, 2025. https://doi.org/10.64898/2025.12.11.25341830
+> *Alzheimer's & Dementia: Diagnosis, Assessment & Disease Monitoring*, 2025. https://doi.org/10.1002/dad2.70360
 
 ```bibtex
 @article{cheng2025sbf,
   title={Investigating the Amyloid-Tau-Neurodegeneration Framework in Alzheimer's Disease Using Semi-Supervised Multimodal Imaging Data Fusion},
   author={Cheng, You and Medina, Adri{\'a}n and Korponay, Cole and Beckmann, Christian F. and Harper, David and Nickerson, Lisa and {Alzheimer's Disease Neuroimaging Initiative}},
-  journal={medRxiv},
+  journal={Alzheimer's \& Dementia: Diagnosis, Assessment \& Disease Monitoring},
   year={2025},
-  doi={10.64898/2025.12.11.25341830},
-  url={https://www.medrxiv.org/content/10.64898/2025.12.11.25341830v1}
+  doi={10.1002/dad2.70360},
+  url={http://dx.doi.org/10.1002/dad2.70360}
 }
 ```
 
