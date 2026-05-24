@@ -138,5 +138,21 @@ Visualization of component and prediction weights is provided in [`../Visualizat
 ---
 
 ## Citation
-If you use this model, please cite:  
-> [https://github.com/ANSR-laboratory/SuperBigFLICA_McL](https://github.com/ANSR-laboratory/SuperBigFLICA_McL)
+If you use this model, please cite:
+
+> **Investigating the Amyloid-Tau-Neurodegeneration Framework in Alzheimer's Disease Using Semi-Supervised Multimodal Imaging Data Fusion**
+> You Cheng, Adrián Medina, Cole Korponay, Christian F. Beckmann, David Harper, Lisa Nickerson, and the Alzheimer's Disease Neuroimaging Initiative
+> *Alzheimer's & Dementia: Diagnosis, Assessment & Disease Monitoring*, 2025. https://doi.org/10.1002/dad2.70360
+
+```bibtex
+@article{cheng2025sbf,
+  title={Investigating the Amyloid-Tau-Neurodegeneration Framework in Alzheimer's Disease Using Semi-Supervised Multimodal Imaging Data Fusion},
+  author={Cheng, You and Medina, Adri{\'a}n and Korponay, Cole and Beckmann, Christian F. and Harper, David and Nickerson, Lisa and {Alzheimer's Disease Neuroimaging Initiative}},
+  journal={Alzheimer's \& Dementia: Diagnosis, Assessment \& Disease Monitoring},
+  year={2025},
+  doi={10.1002/dad2.70360},
+  url={http://dx.doi.org/10.1002/dad2.70360}
+}
+```
+
+Code and documentation: [https://github.com/ANSR-laboratory/SuperBigFLICA_McL](https://github.com/ANSR-laboratory/SuperBigFLICA_McL)
