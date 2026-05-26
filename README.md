@@ -43,14 +43,14 @@ If you use this codebase in your research, please also cite:
 
 > **Investigating the Amyloid-Tau-Neurodegeneration Framework in Alzheimer's Disease Using Semi-Supervised Multimodal Imaging Data Fusion**
 > You Cheng, Adrián Medina, Cole Korponay, Christian F. Beckmann, David Harper, Lisa Nickerson, and the Alzheimer's Disease Neuroimaging Initiative
-> *Alzheimer's & Dementia: Diagnosis, Assessment & Disease Monitoring*, 2025. https://doi.org/10.1002/dad2.70360
+> *Alzheimer's & Dementia: Diagnosis, Assessment & Disease Monitoring*, 2026. https://doi.org/10.1002/dad2.70360
 
 ```bibtex
 @article{cheng2025sbf,
   title={Investigating the Amyloid-Tau-Neurodegeneration Framework in Alzheimer's Disease Using Semi-Supervised Multimodal Imaging Data Fusion},
   author={Cheng, You and Medina, Adri{\'a}n and Korponay, Cole and Beckmann, Christian F. and Harper, David and Nickerson, Lisa and {Alzheimer's Disease Neuroimaging Initiative}},
   journal={Alzheimer's \& Dementia: Diagnosis, Assessment \& Disease Monitoring},
-  year={2025},
+  year={2026},
   doi={10.1002/dad2.70360},
   url={http://dx.doi.org/10.1002/dad2.70360}
 }
@@ -116,20 +116,42 @@ Outputs are written to `opts["output_dir"]` (default: `Data/SBF_outputs/`):
 ```
 Data/SBF_outputs/
 ├── SBFOut_<MODALITY>.nii.gz        # Spatial component maps (NIfTI)
-├── SBFOut_lh_<MODALITY>.mgh        # Left-hemisphere maps (FreeSurfer)
-├── SBFOut_rh_<MODALITY>.mgh        # Right-hemisphere maps (FreeSurfer)
-├── SBFOut_<MODALITY>.dtseries.nii  # Component maps (CIFTI)
-├── lat_train.csv / lat_test.csv    # Latent variables
-├── pred_train.csv / pred_valid.csv / pred_test.csv  # Predictions
-├── modality_weights.csv            # Per-modality loadings
-├── prediction_weights.csv          # Prediction weights
-├── SBF_best_model.pth              # Best model checkpoint
-├── SBF_final_model.pth             # Final model checkpoint
-├── loss_all_test.csv               # Training loss history
-├── best_performance.csv            # Best validation metric
-├── test_corr.txt                   # Test-set correlation (computed post-hoc from best epoch)
-└── order_of_loaded_data.txt        # Data loading order log
+├── SBFOut_lh_<MODALITY>.mgh        # Left-hemisphere component maps (FreeSurfer surface)
+├── SBFOut_rh_<MODALITY>.mgh        # Right-hemisphere component maps (FreeSurfer surface)
+├── SBFOut_<MODALITY>.dtseries.nii  # Spatial component maps (CIFTI)
+├── lat_train.csv                   # Latent components — training set
+├── lat_test.csv                    # Latent components — independent test set
+├── pred_valid.csv                  # Predicted nIDPs — validation set (best epoch)
+├── pred_train.csv                  # Predicted nIDPs — training set (best model)
+├── pred_test.csv                   # Predicted nIDPs — independent test set (best model)
+├── modality_weights.csv            # Per-modality contributions to each latent component
+├── prediction_weights.csv          # Weights mapping latent components to nIDPs
+├── SBF_best_model.pth              # Model checkpoint with best validation performance
+├── SBF_final_model.pth             # Model checkpoint from the final training epoch
+├── loss_all_test.csv               # Per-epoch validation loss (4 components)
+├── test_corr.txt                   # Best Pearson r on the validation set (used to select best model)
+├── best_performance.csv            # Pearson r on the independent test set using the best model
+└── order_of_loaded_data.txt        # Log of data file loading order
 ```
+
+### Output file descriptions
+
+| File | Description |
+|------|-------------|
+| `SBFOut_<MODALITY>.*` | Spatial component maps for each modality. Each map has `nlat` components; voxel/vertex values are spatial loadings from regressing `lat_train` onto the original imaging data. One file per modality in the modality's native format (`.nii.gz`, `.mgh`, or `.dtseries.nii`). |
+| `lat_train.csv` | Multimodal shared latent components for training subjects (subjects × `nlat`). Use these to correlate or predict other nIDPs not used during training. |
+| `lat_test.csv` | Multimodal shared latent components for independent test subjects (subjects × `nlat`), produced by applying the best model to the test set. |
+| `pred_valid.csv` | Predicted nIDPs for validation subjects at the epoch that achieved the best validation correlation. This is the output of the training loop's internal validation. |
+| `pred_train.csv` | Predicted nIDPs for training subjects using the best model. |
+| `pred_test.csv` | Predicted nIDPs for independent test subjects using the best model. |
+| `modality_weights.csv` | `nlat` × modality matrix. Each value is the contribution (softmax-normalized weight) of a modality to a given latent component. |
+| `prediction_weights.csv` | `nlat` × `#nIDPs` matrix. Trained linear weights mapping latent components to predicted nIDPs. |
+| `SBF_best_model.pth` | PyTorch state dict for the model epoch that achieved the highest validation correlation. Use this for downstream inference. |
+| `SBF_final_model.pth` | PyTorch state dict from the last training epoch (may not be the best-performing epoch). |
+| `loss_all_test.csv` | Per-epoch validation loss broken into 4 components: reconstruction loss, spatial loading regularization, MSE prediction loss, and prediction weight regularization. |
+| `test_corr.txt` | Best Pearson r achieved on the **validation set** during training. For a single nIDP this is the correlation; for multiple nIDPs it is the sum of per-target correlations exceeding 0.1. This value is used to select `SBF_best_model.pth`. |
+| `best_performance.csv` | Pearson r between predicted and actual nIDPs on the **independent test set**, computed post-training using `SBF_best_model.pth`. One value per nIDP. This is the held-out generalization metric. |
+| `order_of_loaded_data.txt` | Log of the file paths and order in which imaging data were loaded. Useful for debugging modality alignment. |
 
 ## Project Structure
 
