@@ -1,928 +1,932 @@
-import numpy as np
-import scipy
-from scipy import linalg
-import time
+#!/usr/bin/env python3
+"""SuperBigFLICA utilities with corrected held-out dictionary projection."""
+from __future__ import annotations
+
+import copy
 import os
+import random
+import time
+from copy import deepcopy
+
+import nibabel as nib
+import numpy as np
+import pandas as pd
+import scipy
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
-import random
-import copy
-import pandas as pd
-from torch import optim
 from joblib import Parallel, delayed
-import matplotlib.pyplot as plt
-import matplotlib.cm as cm
-import sklearn
-from sklearn.linear_model import LinearRegression
-from sklearn.metrics import r2_score
-from copy import deepcopy
-import nibabel as nib
+from torch import optim
+from torch.utils.data import DataLoader, Dataset
 
-def select_device():
-    forced = os.getenv("SBF_DEVICE")
-    if forced:
-        return forced
-    if torch.cuda.is_available():
-        return "cuda"
-    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        return "mps"
-    return "cpu"
-
-def load_nidp_csv(path):
-    data = np.genfromtxt(path, delimiter=",", missing_values="", filling_values=np.nan)
-    data = np.atleast_2d(data)
-    if data.shape[0] == 1 and data.shape[1] > 1:
-        data = data.T
-    return data
-
-class loss_SuperBigFLICA_regression(nn.Module):
-    def __init__(self, ntask, nmod, nsub, device = 'cuda', auto_weight = [1,1,1,1], lambdas = [0.25, 0.25, 0.25, 0.25]):
-        super(loss_SuperBigFLICA_regression, self).__init__()
-        
-        self.ntask = ntask
-        self.auto_weight = auto_weight
-        self.nmod=nmod
-        self.mse = nn.MSELoss()
-        self.lambdas = torch.FloatTensor(np.array(lambdas).flatten()).to(device)     
-        #weight for reconstruction loss
-        self.sigma1 = nn.Parameter(torch.ones(1,nmod,device = device))
-        #weight for spatial loadings
-        self.sigma2 = nn.Parameter(torch.ones(1,nmod,device = device))
-        #weight for mse loss of each task
-        self.sigma3 = nn.Parameter(torch.ones(1,ntask,device = device))
-        #weight for regression coefs of each task
-        self.sigma4 = nn.Parameter(torch.ones(1,ntask,device = device))#l1
-        self.sigma5 = nn.Parameter(torch.ones(1,ntask,device = device))#l2
-        self.nsub = nsub
-               
-    def forward(self, recon_x, x_orig, sptial_loadings, y_pred, y_train, pred_weights, lat_train):
-        
-
-        batch_prop = recon_x[0].size()[0]/self.nsub # the ratio of the current batch size to the total dataset size. 
-        
-        #make these parameters always positive
-        sigma1 =self.sigma1**2
-        sigma2 =self.sigma2**2
-        sigma3 =self.sigma3**2 
-        sigma4 =self.sigma4**2
-        sigma5 =self.sigma5**2
-        
-        if self.auto_weight[0] == 0:
-            self.sigma1.requires_grad = False
-        if self.auto_weight[1] == 0:
-            self.sigma2.requires_grad = False
-        if self.auto_weight[2] == 0:
-            self.sigma3.requires_grad = False
-        if self.auto_weight[3] == 0:
-            self.sigma4.requires_grad = False
-            self.sigma5.requires_grad = False
-
-        loss_recon = 0
-        for i in range(0,self.nmod):
-            diff = recon_x[i] - x_orig[i]
-            loss_test = (diff * diff).mean() / sigma1[0,i]**2 / 2
-            # print(loss_test)
-            loss_recon = loss_recon + (diff * diff).mean() / sigma1[0,i]**2 / 2
-        loss_recon = loss_recon + torch.sum(torch.log(sigma1+1)) 
-
-        loss_sptial_loadings = 0
-        for i in range(0,self.nmod):         
-            loss_sptial_loadings = loss_sptial_loadings + sptial_loadings[i].abs().mean() * batch_prop / sigma2[0,i]
-        loss_sptial_loadings = loss_sptial_loadings + 2 * torch.sum(torch.log(sigma2+1)) 
-            
-        y_train = y_train.squeeze(1)  # LN added to remove unnecessary singleton dimension in y_train
-        index_NaN = torch.isnan(y_train)
-        if index_NaN.any():
-            y_train[index_NaN] = y_pred[index_NaN]
-        
-        diff2 = (y_train - y_pred)**2 / sigma3**2 / 2
-        loss_mse = torch.mean(diff2) + torch.sum(torch.log(sigma3 +1))
-        
-        loss_pred_weights = torch.mean(torch.abs(pred_weights) / sigma4  * batch_prop) + 2 * torch.sum(torch.log(sigma4+1)) #l1
-        loss_pred_weights = loss_pred_weights + torch.mean((pred_weights)**2  * batch_prop / sigma5 ** 2 / 2) + torch.sum(torch.log(sigma5+1)) #l2
-        
-        self.lambdas = self.lambdas / torch.sum(self.lambdas)
-        
-        l = self.lambdas[0] * loss_recon + self.lambdas[1] * loss_sptial_loadings + self.lambdas[2] * loss_mse + self.lambdas[3] * loss_pred_weights #+ loss_lat
-        # print('total loss', l)
-        # print('loss recon', self.lambdas[0] * loss_recon)
-        # print('loss spatial loadings', self.lambdas[1] * loss_sptial_loadings)
-        # print('loss mse', self.lambdas[2] * loss_mse)
-        # print('loss pred weights', self.lambdas[3] * loss_pred_weights)
-
-        return l, loss_recon, loss_sptial_loadings, loss_mse, loss_pred_weights
-
-# import pandas as pd
-
-# class load_Multimodal_data1(Dataset):
-
-# class load_Multimodal_data(Dataset):
-
-
-# import torch
-# import numpy as np
-# import copy
-# import scipy
-# import time
-# from torch.utils.data import DataLoader
-
-# This function assumes that the following functions/classes are defined elsewhere and imported:
-# - set_random_seeds
-# - load_Multimodal_data
-# - SupervisedFLICAmodel
-# - Initialize_SuperBigFLICA
-# - loss_SuperBigFLICA_regression
-# - parallel_dictionary_learning
 
 def set_random_seeds(seed=42):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-    torch.use_deterministic_algorithms(True)
+    if torch.backends.cudnn.is_available():
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    try:
+        torch.use_deterministic_algorithms(True, warn_only=True)
+    except TypeError:
+        torch.use_deterministic_algorithms(True)
     print(f"Random seed set to {seed} for reproducibility.")
 
+
+def _as_2d_targets(y):
+    y = np.asarray(y)
+    y = np.atleast_2d(y)
+    if y.shape[0] == 1 and y.shape[1] > 1:
+        y = y.T
+    return y
+
+
+def _safe_pearsonr(x, y):
+    x = np.asarray(x, dtype=np.float64).ravel()
+    y = np.asarray(y, dtype=np.float64).ravel()
+    keep = np.isfinite(x) & np.isfinite(y)
+    x, y = x[keep], y[keep]
+    if x.size < 2 or np.std(x) == 0 or np.std(y) == 0:
+        return np.nan
+    return float(scipy.stats.pearsonr(x, y)[0])
+
+
+class loss_SuperBigFLICA_regression(nn.Module):
+    def __init__(self, ntask, nmod, nsub, device='cuda',
+                 auto_weight=(1, 1, 1, 1),
+                 lambdas=(0.25, 0.25, 0.25, 0.25)):
+        super().__init__()
+        self.ntask = int(ntask)
+        self.nmod = int(nmod)
+        self.nsub = int(nsub)
+        self.auto_weight = list(auto_weight)
+
+        lam = torch.as_tensor(np.asarray(lambdas).flatten(),
+                              dtype=torch.float32, device=device)
+        if lam.numel() != 4 or torch.sum(lam) <= 0:
+            raise ValueError("lambdas must contain four values with positive sum")
+        self.register_buffer('lambdas', lam / torch.sum(lam))
+
+        self.sigma1 = nn.Parameter(torch.ones(1, self.nmod, device=device))
+        self.sigma2 = nn.Parameter(torch.ones(1, self.nmod, device=device))
+        self.sigma3 = nn.Parameter(torch.ones(1, self.ntask, device=device))
+        self.sigma4 = nn.Parameter(torch.ones(1, self.ntask, device=device))
+        self.sigma5 = nn.Parameter(torch.ones(1, self.ntask, device=device))
+
+    def forward(self, recon_x, x_orig, sptial_loadings, y_pred,
+                y_train, pred_weights, lat_train):
+        del lat_train
+        batch_prop = recon_x[0].shape[0] / float(self.nsub)
+        sigma1, sigma2 = self.sigma1.square(), self.sigma2.square()
+        sigma3, sigma4 = self.sigma3.square(), self.sigma4.square()
+        sigma5 = self.sigma5.square()
+
+        if self.auto_weight[0] == 0:
+            self.sigma1.requires_grad_(False)
+        if self.auto_weight[1] == 0:
+            self.sigma2.requires_grad_(False)
+        if self.auto_weight[2] == 0:
+            self.sigma3.requires_grad_(False)
+        if self.auto_weight[3] == 0:
+            self.sigma4.requires_grad_(False)
+            self.sigma5.requires_grad_(False)
+
+        loss_recon = torch.zeros((), device=y_pred.device)
+        for i in range(self.nmod):
+            diff = recon_x[i] - x_orig[i]
+            loss_recon += diff.square().mean() / sigma1[0, i].square() / 2
+        loss_recon += torch.sum(torch.log(sigma1 + 1))
+
+        loss_spatial = torch.zeros((), device=y_pred.device)
+        for i in range(self.nmod):
+            loss_spatial += (sptial_loadings[i].abs().mean() * batch_prop /
+                             sigma2[0, i])
+        loss_spatial += 2 * torch.sum(torch.log(sigma2 + 1))
+
+        # Preserve [batch, target] shape. The old squeeze caused broadcasting.
+        target = y_train
+        if target.ndim == 1:
+            target = target[:, None]
+        if target.shape != y_pred.shape:
+            if target.numel() != y_pred.numel():
+                raise ValueError(f"target shape {target.shape} != prediction {y_pred.shape}")
+            target = target.reshape_as(y_pred)
+        target = torch.where(torch.isnan(target), y_pred.detach(), target)
+
+        loss_mse = ((target - y_pred).square() / sigma3.square() / 2).mean()
+        loss_mse += torch.sum(torch.log(sigma3 + 1))
+
+        loss_pred = torch.mean(torch.abs(pred_weights) / sigma4 * batch_prop)
+        loss_pred += 2 * torch.sum(torch.log(sigma4 + 1))
+        loss_pred += torch.mean(pred_weights.square() * batch_prop /
+                                sigma5.square() / 2)
+        loss_pred += torch.sum(torch.log(sigma5 + 1))
+
+        total = (self.lambdas[0] * loss_recon +
+                 self.lambdas[1] * loss_spatial +
+                 self.lambdas[2] * loss_mse +
+                 self.lambdas[3] * loss_pred)
+        return total, loss_recon, loss_spatial, loss_mse, loss_pred
+
+
 class SupervisedFLICAmodel(nn.Module):
-    def __init__(self,nfea, nlat, ntask, dropout = 0.5, device = 'cpu', init_spatial_loading = None, init_weight_pred=None, init_bais_pred=None):
-        
-        #nfea: list of length K, number of features in each modality
-        #nlat: number of components to extract
-        
-        super(SupervisedFLICAmodel, self).__init__()
-        
-        nmod = len(nfea)
-        self.ntask = ntask
-        self.dropout = dropout
-        self.nlat = nlat
+    def __init__(self, nfea, nlat, ntask, dropout=0.5, device='cpu',
+                 init_spatial_loading=None, init_weight_pred=None,
+                 init_bais_pred=None):
+        super().__init__()
+        self.ntask = int(ntask)
+        self.dropout = float(dropout)
+        self.nlat = int(nlat)
+        self.nmod = len(nfea)
 
-        #initialize the spatial loading of each modality
+        self.spatial_loading = nn.ParameterList()
         if init_spatial_loading is None:
-            self.spatial_loading = nn.ParameterList([])
-            for i in range(0,nmod):
-                self.spatial_loading.append( nn.Parameter(torch.randn(nfea[i],nlat).to(device)) )
-                #torch.nn.init.normal_(self.spatial_loading[i])
+            for nf in nfea:
+                self.spatial_loading.append(
+                    nn.Parameter(torch.randn(int(nf), self.nlat, device=device)))
         else:
-            self.spatial_loading = nn.ParameterList([])
-            for i in range(0,nmod):
-                self.spatial_loading.append( nn.Parameter(torch.FloatTensor(init_spatial_loading[i]).to(device)) )                
+            for loading in init_spatial_loading:
+                self.spatial_loading.append(nn.Parameter(
+                    torch.as_tensor(loading, dtype=torch.float32, device=device)))
 
-        #initialize the modalitity weights (initilize to 1)
-        self.mod_weight = nn.Parameter(torch.ones(nlat,nmod).to(device))
-        
-        #initalize the prediction weights        
+        self.mod_weight = nn.Parameter(torch.ones(self.nlat, self.nmod,
+                                                   device=device))
         if init_weight_pred is None:
-            set_random_seeds()
-
-            self.weight_pred = nn.Parameter(torch.randn(nlat,self.ntask).to(device))
-            #torch.nn.init.normal_(self.weight_pred)
-            self.bias_pred = nn.Parameter(torch.randn(1,self.ntask).to(device))
-            #torch.nn.init.normal_(self.bias_pred)
-            
+            self.weight_pred = nn.Parameter(torch.randn(self.nlat, self.ntask,
+                                                        device=device))
+            self.bias_pred = nn.Parameter(torch.randn(1, self.ntask,
+                                                       device=device))
         else:
-            self.weight_pred = nn.Parameter(torch.FloatTensor(init_weight_pred).to(device))
-            self.bias_pred = nn.Parameter(torch.FloatTensor(init_bais_pred).to(device))
+            self.weight_pred = nn.Parameter(torch.as_tensor(
+                init_weight_pred, dtype=torch.float32, device=device))
+            self.bias_pred = nn.Parameter(torch.as_tensor(
+                init_bais_pred, dtype=torch.float32, device=device))
+        self.batch_norm = nn.BatchNorm1d(self.nlat)
 
-        self.batch_norm = nn.BatchNorm1d(nlat)
-        
-        #other variables
-        self.nlat = nlat    
-        self.nmod = nmod   
-        
     def forward(self, x, device='cpu'):
-        #x is a list of length K [nsub * nfeature]
-        # print("before softmax", self.mod_weight)
-        mod_weight = F.softmax(self.mod_weight,dim=1)
-        # print("after softmax", mod_weight)
-        latents_common = torch.zeros(x[0].size()[0],self.nlat,device=device)
-        for i in range(0,self.nmod): 
+        mod_weight = F.softmax(self.mod_weight, dim=1)
+        latent = torch.zeros(x[0].shape[0], self.nlat, device=device,
+                             dtype=torch.float32)
+        for i in range(self.nmod):
             dat = F.dropout(x[i], self.dropout, training=self.training)
-           # latents = dat.matmul(self.spatial_loading[i]).matmul(torch.diag(mod_weight[:,i]))  LN changed to line 370 to make all floats so code can execute
-            latents = dat.float().matmul(self.spatial_loading[i].float()).matmul(torch.diag(mod_weight[:, i].float()))
+            latent += (dat.float().matmul(self.spatial_loading[i].float())
+                       .matmul(torch.diag(mod_weight[:, i].float())))
+        latent /= float(self.nmod)
+        latent = self.batch_norm(latent)
+        latent = F.dropout(latent, self.dropout, training=self.training)
 
-            latents = latents.squeeze(1)        # LN added to remove extra singleton dimension so latents can be added to latents_common
-            latents_common = latents_common + latents
-
-            
-        latents_common = latents_common / self.nmod
-        #print("Shape of latents_common before batch norm:", latents_common.shape)  # Debugging
-        
-        #batch norm
-        self.batch_norm = self.batch_norm.to(device)
-        latents_common = self.batch_norm(latents_common)
-        #dropout
-        latents_common = F.dropout(latents_common, self.dropout, training=self.training)
-        
-        output = []  ##the same size as x
-        for i in range(0,self.nmod):
-            w = (self.spatial_loading[i]).matmul(torch.diag(mod_weight[:,i]))
-            output.append( (latents_common.matmul(w.t())) )
-        
-        #doing prediction         
-        pred = latents_common.matmul(self.weight_pred)+self.bias_pred ##it is nsubj_train * 1            
-
-        return output, self.spatial_loading, latents_common, pred, self.weight_pred
+        outputs = []
+        for i in range(self.nmod):
+            w = self.spatial_loading[i].matmul(torch.diag(mod_weight[:, i]))
+            outputs.append(latent.matmul(w.T))
+        pred = latent.matmul(self.weight_pred) + self.bias_pred
+        return outputs, self.spatial_loading, latent, pred, self.weight_pred
 
 
+def Initialize_SuperBigFLICA(x_train, y_train, nlat, train_ind=None):
+    del train_ind
+    y_train = _as_2d_targets(y_train)
+    spatial, latent_sets = [], []
+    for x in x_train:
+        x = np.asarray(x, dtype=np.float64)
+        _, _, vt = np.linalg.svd(x, full_matrices=False)
+        loading = vt[:min(nlat, vt.shape[0]), :].T
+        if loading.shape[1] < nlat:
+            loading = np.pad(loading, ((0, 0), (0, nlat-loading.shape[1])))
+        spatial.append(loading.astype(np.float32))
+        latent_sets.append(x @ loading)
+    common = np.mean(latent_sets, axis=0)
+    valid = np.isfinite(y_train).all(axis=1)
+    design = np.column_stack((common[valid], np.ones(np.sum(valid))))
+    coef = np.linalg.pinv(design) @ y_train[valid]
+    return spatial, coef[:-1].astype(np.float32), coef[-1:].astype(np.float32), common
 
-def SupervisedFLICA(x_train, y_train, nlat, x_test, y_test, Data_test, output_dir, random_seed=666,
-                    train_ind=None, init_method='random', dropout=0.25, device='cpu',
-                    auto_weight=[1,1,1,1], lambdas=[0.25, 0.25, 0.25, 0.25],
-                    lr=0.001, batch_size=512, maxiter=50, dicl_dim=100,
-                    save_all_epochs=False, img_info=None, opts=None):
+# -------------------------------------------------------------------------
+# Dictionary learning and fixed-dictionary projection
+# -------------------------------------------------------------------------
 
-    y_train = np.atleast_2d(y_train)
-    y_test = np.atleast_2d(y_test)
-    if y_train.shape[0] == 1 and y_train.shape[1] > 1:
-        y_train = y_train.T
-    if y_test.shape[0] == 1 and y_test.shape[1] > 1:
-        y_test = y_test.T
+def dictionary_learning_pytorch(X, n_components=100, lambda_l1=0.1,
+                                n_iter=20, lr=0.01, device='cpu',
+                                random_seed=42):
+    """Learn a dictionary from training data only."""
+    set_random_seeds(random_seed)
+    X = np.asarray(X, dtype=np.float32)
+    Xt = torch.as_tensor(X, dtype=torch.float32, device=device)
+    n_subjects, n_features = X.shape
 
-    torch.manual_seed(random_seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(random_seed)
-    np.random.seed(random_seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    D = torch.randn(n_features, n_components, device=device)
+    D = D / D.norm(dim=0, keepdim=True).clamp_min(1e-8)
+    A = torch.zeros(n_subjects, n_components, device=device)
 
-    nmod = len(x_train)
-    ntask = y_train.shape[1]
+    for iteration in range(n_iter):
+        A = A.detach().requires_grad_(True)
+        optA = optim.SGD([A], lr=lr)
+        for _ in range(5):
+            optA.zero_grad(set_to_none=True)
+            recon = A.matmul(D.T)
+            lossA = (Xt - recon).square().mean() + lambda_l1 * A.abs().mean()
+            lossA.backward()
+            optA.step()
+        A = A.detach()
+
+        ata = A.T.matmul(A)
+        ridge = 1e-6 * torch.eye(n_components, device=device, dtype=ata.dtype)
+        xta = Xt.T.matmul(A)
+        try:
+            D = torch.linalg.solve(ata + ridge, xta.T).T
+        except RuntimeError:
+            D = xta.matmul(torch.linalg.pinv(ata + ridge))
+        D = D / D.norm(dim=0, keepdim=True).clamp_min(1e-8)
+
+        if iteration == 0 or (iteration + 1) % 5 == 0:
+            print(f"Dictionary iteration {iteration+1}/{n_iter}; "
+                  f"coefficient loss={lossA.item():.6g}")
+
+    return D.detach().cpu().numpy(), A.detach().cpu().numpy()
+
+
+def _soft_threshold(x, threshold):
+    return torch.sign(x) * torch.clamp(torch.abs(x) - threshold, min=0.0)
+
+
+def apply_dictionary(D, X, lambda_l1=0.1, max_iter=1000,
+                     tol=1e-6, device='cpu'):
+    """
+    Estimate coefficients for a fixed dictionary with adaptive-restart FISTA.
+
+    The same converged solver is used for train, validation, and test, fixing
+    the systematic held-out coefficient shrinkage from the old 20-step SGD.
+    """
+    D = np.asarray(D, dtype=np.float32)
+    X = np.asarray(X, dtype=np.float32)
+    Dt = torch.as_tensor(D, dtype=torch.float32, device=device)
+    Xt = torch.as_tensor(X, dtype=torch.float32, device=device)
+
+    n_subjects, n_features = Xt.shape
+    n_components = Dt.shape[1]
+    if Dt.shape[0] != n_features:
+        raise ValueError(f"D has {Dt.shape[0]} features; X has {n_features}")
+
+    gram = Dt.T.matmul(Dt)
+    x_times_d = Xt.matmul(Dt)
+    largest_eigenvalue = torch.linalg.eigvalsh(gram).max()
+    lipschitz = (2.0 * largest_eigenvalue / float(n_features)).clamp_min(1e-12)
+    step_size = 1.0 / lipschitz
+    threshold = step_size * float(lambda_l1) / float(n_components)
+
+    A = torch.zeros(n_subjects, n_components, device=device)
+    Y = A.clone()
+    momentum = 1.0
+    relative_change = np.inf
+    converged_at = max_iter
+
+    for iteration in range(1, max_iter + 1):
+        gradient = 2.0 / float(n_features) * (Y.matmul(gram) - x_times_d)
+        A_new = _soft_threshold(Y - step_size * gradient, threshold)
+        delta = A_new - A
+        relative_change = float((torch.linalg.norm(delta) /
+                                 torch.linalg.norm(A_new).clamp_min(1e-12)).item())
+
+        momentum_new = (1.0 + np.sqrt(1.0 + 4.0 * momentum * momentum)) / 2.0
+        Y_new = A_new + ((momentum - 1.0) / momentum_new) * delta
+
+        # Adaptive restart to reduce FISTA oscillation.
+        if torch.sum((Y_new - A_new) * (A_new - A)) > 0:
+            momentum_new = 1.0
+            Y_new = A_new.clone()
+
+        A, Y, momentum = A_new, Y_new, momentum_new
+        if relative_change < tol:
+            converged_at = iteration
+            break
+
+    objective = ((Xt - A.matmul(Dt.T)).square().mean() +
+                 float(lambda_l1) * A.abs().mean())
+    print("Fixed-dictionary coding: "
+          f"subjects={n_subjects}, features={n_features}, "
+          f"components={n_components}, iterations={converged_at}, "
+          f"relative_change={relative_change:.3e}, "
+          f"objective={objective.item():.6g}")
+    return A.detach().cpu().numpy()
+
+
+def process_modality(i, X_train, dicl_dim, X_val, X_test,
+                     lambda_l1=0.1, projection_max_iter=1000,
+                     projection_tol=1e-6, random_seed=42):
+    print(f"Starting dictionary learning for modality {i}")
+    D, _ = dictionary_learning_pytorch(
+        X_train, n_components=dicl_dim, lambda_l1=lambda_l1,
+        n_iter=20, lr=0.01, device='cpu', random_seed=random_seed + i)
+
+    # Re-estimate all splits against the same final dictionary.
+    A_train = apply_dictionary(D, X_train, lambda_l1,
+                               projection_max_iter, projection_tol, 'cpu')
+    A_val = apply_dictionary(D, X_val, lambda_l1,
+                             projection_max_iter, projection_tol, 'cpu')
+    A_test = apply_dictionary(D, X_test, lambda_l1,
+                              projection_max_iter, projection_tol, 'cpu')
+
+    train_sd = np.std(A_train, axis=0, ddof=0)
+    train_sd[train_sd == 0] = np.nan
+    val_ratio = np.nanmedian(np.std(A_val, axis=0, ddof=0) / train_sd)
+    test_ratio = np.nanmedian(np.std(A_test, axis=0, ddof=0) / train_sd)
+    print(f"Modality {i} projection scale: validation/train SD={val_ratio:.4f}; "
+          f"test/train SD={test_ratio:.4f}")
+    return i, D, A_train, A_val, A_test
+
+
+def parallel_dictionary_learning(Data_train, Data_validation, Data_test,
+                                 dicl_dim, n_jobs=-1, lambda_l1=0.1,
+                                 projection_max_iter=1000,
+                                 projection_tol=1e-6, random_seed=42):
+    results = Parallel(n_jobs=n_jobs)(
+        delayed(process_modality)(
+            i, Data_train[i], dicl_dim, Data_validation[i], Data_test[i],
+            lambda_l1, projection_max_iter, projection_tol, random_seed)
+        for i in range(len(Data_train)))
+    results = sorted(results, key=lambda item: item[0])
+
+    dictionaries = []
+    for i, D, A_train, A_val, A_test in results:
+        Data_train[i] = A_train
+        Data_validation[i] = A_val
+        Data_test[i] = A_test
+        dictionaries.append(D)
+    return dictionaries, Data_train, Data_validation, Data_test
+
+
+class load_Multimodal_data(Dataset):
+    def __init__(self, X, y=None, transform=None):
+        self.X = X
+        self.K = len(X)
+        self.y = y
+        self.transform = transform
+        if self.K == 0:
+            raise ValueError("At least one modality is required")
+        n = len(self.X[0])
+        for i, modality in enumerate(self.X):
+            if len(modality) != n:
+                raise ValueError(f"Modality {i} has {len(modality)} subjects; expected {n}")
+        if y is not None and len(y) != n:
+            raise ValueError(f"Targets have {len(y)} subjects; imaging has {n}")
+
+    def __len__(self):
+        return len(self.X[0])
+
+    def __getitem__(self, index):
+        image = [self.X[i][index, :] for i in range(self.K)]
+        if self.y is None:
+            return image
+        return image, torch.as_tensor(self.y[index, :], dtype=torch.float32)
+
+
+def SupervisedFLICA(x_train, y_train, nlat, x_test, y_test, Data_test,
+                    output_dir, random_seed=666, train_ind=None,
+                    init_method='random', dropout=0.25, device='cpu',
+                    auto_weight=(1, 1, 1, 1),
+                    lambdas=(0.25, 0.25, 0.25, 0.25), lr=0.001,
+                    batch_size=512, maxiter=50, dicl_dim=100):
+    del output_dir
+    y_train = _as_2d_targets(y_train).astype(np.float32)
+    y_test = _as_2d_targets(y_test).astype(np.float32)
+    x_train = [np.asarray(x, dtype=np.float32).copy() for x in x_train]
+    x_test = [np.asarray(x, dtype=np.float32).copy() for x in x_test]
+    Data_test = [np.asarray(x, dtype=np.float32).copy() for x in Data_test]
+
+    set_random_seeds(random_seed)
+    nmod, ntask = len(x_train), y_train.shape[1]
     device = torch.device(device)
 
     print("Applying Dictionary Learning")
-    dictionaries, x_train, x_test, Data_test = parallel_dictionary_learning(x_train, x_test, Data_test, dicl_dim)
+    dictionaries, x_train, x_test, Data_test = parallel_dictionary_learning(
+        x_train, x_test, Data_test, dicl_dim, n_jobs=-1,
+        lambda_l1=0.1, projection_max_iter=1000,
+        projection_tol=1e-6, random_seed=random_seed)
     Data_train = copy.deepcopy(x_train)
     Data_validation = copy.deepcopy(x_test)
     print("Dictionary Learning Done.")
 
     nfea = [x.shape[1] for x in x_train]
-
-    is_norm = True
-    norm_stats = []
-    if is_norm:
-        for i in range(len(x_train)):
-            x_mean = x_train[i].mean(axis=0)
-            x_stds = x_train[i].std(axis=0)
-            epsilon = 1e-3
-            x_stds[x_stds == 0] = epsilon
-            x_train[i] = (x_train[i] - x_mean) / x_stds
-            x_test[i] = (x_test[i] - x_mean) / x_stds
-            norm_stats.append((x_mean, x_stds))
+    for i in range(nmod):
+        mean = x_train[i].mean(axis=0)
+        sd = x_train[i].std(axis=0, ddof=0)
+        sd[sd == 0] = 1e-3
+        x_train[i] = (x_train[i] - mean) / sd
+        x_test[i] = (x_test[i] - mean) / sd
 
     y_mean = np.nanmean(y_train, axis=0)
     y_stds = np.nanstd(y_train, axis=0)
-    y_train = (y_train - y_mean) / y_stds
-    y_test = (y_test - y_mean) / y_stds
+    y_stds[y_stds == 0] = 1.0
+    y_train_z = (y_train - y_mean) / y_stds
+    y_test_z = (y_test - y_mean) / y_stds
+    print("Normalization done.")
 
-    print('Done...')
-    set_random_seeds(seed=random_seed)
-
-    train_dataset = load_Multimodal_data(X=x_train, y=y_train)
-    train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True)
-    train_loader_eval = None
-    if save_all_epochs:
-        train_loader_eval = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=False)
-    test_dataset = load_Multimodal_data(X=x_test, y=y_test)
-    test_loader = DataLoader(dataset=test_dataset, batch_size=batch_size, shuffle=False)
+    set_random_seeds(random_seed)
+    train_loader = DataLoader(load_Multimodal_data(x_train, y_train_z),
+                              batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(load_Multimodal_data(x_test, y_test_z),
+                            batch_size=batch_size, shuffle=False)
 
     if init_method == 'random':
-        model = SupervisedFLICAmodel(nfea=nfea, nlat=nlat, ntask=ntask, dropout=dropout,
-                                     device=device, init_spatial_loading=None,
-                                     init_weight_pred=None, init_bais_pred=None).to(device)
+        model = SupervisedFLICAmodel(nfea, nlat, ntask, dropout, device).to(device)
     else:
-        print('Multimodal MIGP initialization...')
-        init_spatial_loading, init_weight_pred, init_bais_pred, uu = Initialize_SuperBigFLICA(x_train, y_train, nlat, train_ind)
-        print('Done...')
-        model = SupervisedFLICAmodel(nfea=nfea, nlat=nlat, ntask=ntask, dropout=dropout,
-                                     device=device, init_spatial_loading=init_spatial_loading,
-                                     init_weight_pred=init_weight_pred, init_bais_pred=init_bais_pred).to(device)
-    print(f"Model device: {next(model.parameters()).device}")
+        init_spatial, init_weight, init_bias, _ = Initialize_SuperBigFLICA(
+            x_train, y_train_z, nlat, train_ind)
+        model = SupervisedFLICAmodel(
+            nfea, nlat, ntask, dropout, device,
+            init_spatial, init_weight, init_bias).to(device)
 
-    loss_fun_reg = loss_SuperBigFLICA_regression(ntask=ntask, nmod=nmod, device=device, nsub=x_train[0].shape[0],
-                                                 auto_weight=auto_weight, lambdas=lambdas).to(device)
+    loss_fun = loss_SuperBigFLICA_regression(
+        ntask, nmod, x_train[0].shape[0], device, auto_weight, lambdas).to(device)
+    y_mean_t = torch.as_tensor(y_mean, dtype=torch.float32, device=device)
+    y_stds_t = torch.as_tensor(y_stds, dtype=torch.float32, device=device)
 
-    y_mean1 = torch.FloatTensor(y_mean).to(device)
-    y_stds1 = torch.FloatTensor(y_stds).to(device)
+    optimizer1 = torch.optim.Adam(loss_fun.parameters(), lr=lr)
+    optimizer = torch.optim.RMSprop(model.parameters(), lr=lr, momentum=0.9)
+    model_steps = max(1, (maxiter + 1) * len(train_loader))
+    loss_steps = max(1, max(0, maxiter - 9) * len(train_loader))
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=model_steps)
+    scheduler1 = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer1, T_max=loss_steps)
 
-    optimizer1 = torch.optim.Adam(loss_fun_reg.parameters(), lr)
-    optimizer = torch.optim.RMSprop(model.parameters(), lr, momentum=0.9)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=maxiter)
-    scheduler1 = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer1, T_max=maxiter)
+    loss_all_test = np.zeros((maxiter, 4), dtype=np.float64)
+    best_corr, pred_best, best_model = -np.inf, None, None
 
-    epochs = maxiter
-    loss_all_train = []
-    loss_all_test = np.zeros((maxiter, 4))
-    best_corr = -1
-    save_all_epochs = bool(save_all_epochs)
-    epoch_details_dir = None
-    if save_all_epochs and output_dir:
-        epoch_details_dir = os.path.join(output_dir, "epoch_details")
-        os.makedirs(epoch_details_dir, exist_ok=True)
-    can_save_maps = save_all_epochs and (img_info is not None) and (opts is not None)
-    if save_all_epochs and not can_save_maps:
-        print("Warning: save_all_epochs=True but img_info/opts not provided; spatial maps will not be saved each epoch.")
-    corr_per_target_all = []
-    corr_sum_all = []
-    epoch_state_dicts = []
-
-    for epoch in range(epochs + 1):
+    for epoch in range(maxiter + 1):
         torch.manual_seed(epoch)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed(epoch)
-        tt = time.time()
-
+        torch.cuda.manual_seed_all(epoch)
+        start = time.time()
         model.train()
-        train_loss = 0
-        train_MAE = 0
+        train_loss = 0.0
+        train_abs = 0.0
 
-        for batch_idx, (data_batch, labels) in enumerate(train_loader):
-            for i in range(nmod):
-                data_batch[i] = data_batch[i].to(device)
+        for data_batch, labels in train_loader:
+            data_batch = [x.to(device) for x in data_batch]
             labels = labels.to(device)
-            if epoch == 0 and batch_idx == 0:
-                print(f"First train batch device: {data_batch[0].device}, labels: {labels.device}")
-
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)
             if epoch >= 10:
-                optimizer1.zero_grad()
+                optimizer1.zero_grad(set_to_none=True)
 
-            recon_train, spatial_loadings, lat_train, pred_all, weight_pred = model(x=data_batch, device=device)
-            loss, _, _, _, _ = loss_fun_reg(recon_train, data_batch, spatial_loadings, pred_all, labels, weight_pred, lat_train)
+            recon, spatial, lat, pred, weight = model(data_batch, device)
+            loss, _, _, _, _ = loss_fun(
+                recon, data_batch, spatial, pred, labels, weight, lat)
             loss.backward()
             optimizer.step()
+            scheduler.step()
             if epoch >= 10:
                 optimizer1.step()
-            scheduler.step()
-            scheduler1.step()
+                scheduler1.step()
 
-            train_loss += loss.item()
-            pred_all1 = (pred_all * y_stds1) + y_mean1
-            labels1 = (labels * y_stds1) + y_mean1
-            train_MAE += torch.sum(torch.abs(pred_all1 - labels1)) / pred_all.size()[1]
+            train_loss += float(loss.item())
+            pred_orig = pred * y_stds_t + y_mean_t
+            label_orig = labels * y_stds_t + y_mean_t
+            train_abs += float(torch.abs(pred_orig - label_orig).sum().item())
 
-        train_MAE /= y_train.shape[0]
-        loss_all_train.append(train_loss)
+        train_mae = train_abs / float(y_train_z.shape[0] * ntask)
 
         model.eval()
-        test_l1 = test_l2 = test_l3 = test_l4 = test_loss = 0
-
+        l1 = l2 = l3 = l4 = val_loss = 0.0
+        pred_batches = []
         with torch.no_grad():
-            for batch_idx, (data_batch, labels) in enumerate(test_loader):
-                for i in range(nmod):
-                    data_batch[i] = data_batch[i].to(device)
+            for data_batch, labels in val_loader:
+                data_batch = [x.to(device) for x in data_batch]
                 labels = labels.to(device)
+                recon, spatial, lat, pred, weight = model(data_batch, device)
+                loss, a, b, c, d = loss_fun(
+                    recon, data_batch, spatial, pred, labels, weight, lat)
+                val_loss += float(loss.item())
+                l1 += float(a.item()); l2 += float(b.item())
+                l3 += float(c.item()); l4 += float(d.item())
+                pred_batches.append((pred * y_stds_t + y_mean_t).cpu().numpy())
 
-                recon_train, spatial_loadings, lat_test, pred_all, weight_pred = model(x=data_batch, device=device)
-                loss, l1, l2, l3, l4 = loss_fun_reg(recon_train, data_batch, spatial_loadings, pred_all, labels, weight_pred, lat_train)
+        pred_val = np.vstack(pred_batches)
+        y_val_orig = y_test_z * y_stds + y_mean
+        corr_each = np.array([_safe_pearsonr(pred_val[:, j], y_val_orig[:, j])
+                              for j in range(ntask)])
+        corr_val = (np.nansum(corr_each[corr_each > 0.1]) if ntask > 1
+                    else float(np.nanmean(corr_each)))
+        finite = np.isfinite(pred_val) & np.isfinite(y_val_orig)
+        val_mae = float(np.mean(np.abs(pred_val[finite] - y_val_orig[finite])))
 
-                test_loss += loss
-                test_l1 += l1
-                test_l2 += l2
-                test_l3 += l3
-                test_l4 += l4
+        if epoch >= 1 and np.isfinite(corr_val) and corr_val > best_corr:
+            best_corr = corr_val
+            pred_best = pred_val.copy()
+            best_model = copy.deepcopy(model)
+        if epoch >= 1:
+            loss_all_test[epoch - 1] = [l1, l2, l3, l4]
 
-                if batch_idx == 0:
-                    pred_all1 = (pred_all * y_stds1) + y_mean1
-                    pred_test = torch.Tensor.cpu(pred_all1).detach().numpy()
-                    lat_test_all = torch.Tensor.cpu(lat_test).detach().numpy()
-                else:
-                    pred_all1 = (pred_all * y_stds1) + y_mean1
-                    pred_test = np.vstack((pred_test, torch.Tensor.cpu(pred_all1).detach().numpy()))
-                    lat_test_all = np.vstack((lat_test_all, torch.Tensor.cpu(lat_test).detach().numpy()))
+        print(f"Epoch {epoch} | Train Loss: "
+              f"{train_loss/len(train_loader.dataset):.6f} | "
+              f"Train MAE: {train_mae:.4f} | Validation Loss: "
+              f"{val_loss/len(val_loader.dataset):.4f} | "
+              f"Validation MAE: {val_mae:.4f} | "
+              f"Validation Corr: {corr_val:.4f} | "
+              f"Time: {time.time()-start:.2f}s")
 
-            lat_train_all = None
-            if save_all_epochs and train_loader_eval is not None:
-                for batch_idx, (data_batch, _) in enumerate(train_loader_eval):
-                    for i in range(nmod):
-                        data_batch[i] = data_batch[i].to(device)
-                    recon_train, spatial_loadings, lat_train, pred_all, weight_pred = model(x=data_batch, device=device)
-                    lat_np = torch.Tensor.cpu(lat_train).detach().numpy()
-                    if batch_idx == 0:
-                        lat_train_all = lat_np
-                    else:
-                        lat_train_all = np.vstack((lat_train_all, lat_np))
+    if best_model is None:
+        raise RuntimeError("No valid best model was selected")
+    return (pred_best, best_model.to('cpu'), loss_all_test, best_corr,
+            model.to('cpu'), Data_train, Data_validation, Data_test,
+            dictionaries)
 
-            idx_nonnan = np.isnan(y_test) == 0
-            corr_test1 = np.zeros((y_test.shape[1],))
+# -------------------------------------------------------------------------
+# Model extraction and spatial regression
+# -------------------------------------------------------------------------
 
-            y_test1 = np.array(y_test) * np.array(y_stds1.cpu()) + np.array(y_mean1.cpu())
-
-            for ij in range(y_test1.shape[1]):
-                if np.sum(idx_nonnan[:, ij]) >= 10:
-                    pred_valid = pred_test[:, ij].astype(np.float64)
-                    y_valid = y_test1[:, ij].astype(np.float64)
-                    if np.isnan(pred_valid).any() or np.isnan(y_valid).any():
-                        valid_mask = ~np.isnan(pred_valid) & ~np.isnan(y_valid)
-                        pred_valid = pred_valid[valid_mask]
-                        y_valid = y_valid[valid_mask]
-                    if pred_valid.size >= 2 and y_valid.size >= 2:
-                        corr_test1[ij] = scipy.stats.pearsonr(pred_valid, y_valid)[0]
-                    else:
-                        print(
-                            f"Warning: skipping pearsonr for target {ij} due to insufficient valid points "
-                            f"(n={pred_valid.size})."
-                        )
-
-            corr_test = np.nansum(corr_test1[corr_test1 > 0.1]) if y_test.shape[1] > 1 else np.nanmean(corr_test1)
-            test_MAE = np.mean(np.abs(pred_test[idx_nonnan].flatten() - y_test[idx_nonnan].flatten()))
-
-            if epoch >= 1 and corr_test > best_corr:
-                best_corr = corr_test
-                pred_best = pred_test.copy()
-                best_model = copy.deepcopy(model)
-
-            loss_all_test[epoch - 1, 0] = test_l1.cpu().numpy()
-            loss_all_test[epoch - 1, 1] = test_l2.cpu().numpy()
-            loss_all_test[epoch - 1, 2] = test_l3.cpu().numpy()
-            loss_all_test[epoch - 1, 3] = test_l4.cpu().numpy()
-
-            if save_all_epochs:
-                corr_per_target_all.append(corr_test1.copy())
-                corr_sum_all.append(corr_test)
-                epoch_state_dicts.append(copy.deepcopy(model.state_dict()))
-                if epoch_details_dir is not None:
-                    epoch_dir = os.path.join(epoch_details_dir, f"epoch_{epoch:03d}")
-                    os.makedirs(epoch_dir, exist_ok=True)
-                    np.savetxt(os.path.join(epoch_dir, "corr_per_target_validation.csv"),
-                               corr_test1[None, :], delimiter=',')
-                    with open(os.path.join(epoch_dir, "corr_sum_validation.txt"), "w") as f:
-                        f.write(str(corr_test))
-                    if can_save_maps:
-                        maps_dir = os.path.join(epoch_dir, "spatial_maps")
-                        os.makedirs(maps_dir, exist_ok=True)
-                        spatial_loadings_np = [sl.detach().cpu().numpy() for sl in model.spatial_loading]
-                        SBF_save_everything(maps_dir, spatial_loadings_np, img_info, opts, dictionaries)
-                    if lat_train_all is not None:
-                        np.save(os.path.join(epoch_dir, "lat_train.npy"), lat_train_all)
-                        np.savetxt(os.path.join(epoch_dir, "lat_train.csv"), lat_train_all, delimiter=',')
-                    if 'lat_test_all' in locals():
-                        np.save(os.path.join(epoch_dir, "lat_validation.npy"), lat_test_all)
-                        np.savetxt(os.path.join(epoch_dir, "lat_validation.csv"), lat_test_all, delimiter=',')
-                    pred_weights_np = model.weight_pred.detach().cpu().numpy()
-                    mod_weights_np = F.softmax(model.mod_weight, dim=1).detach().cpu().numpy()
-                    np.savetxt(os.path.join(epoch_dir, "prediction_weights.csv"), pred_weights_np, delimiter=',')
-                    np.savetxt(os.path.join(epoch_dir, "modality_weights.csv"), mod_weights_np, delimiter=',')
-
-        print(f'Epoch {epoch} | Train Loss: {train_loss / len(train_loader.dataset):.6f} | '
-              f'Test Loss: {test_loss / len(test_loader.dataset):.4f} | '
-              f'Test MAE: {test_MAE:.4f} | '
-              f'Test Corr (Sum r>0.1): {corr_test:.4f} | Time: {time.time() - tt:.2f}s')
-
-    if save_all_epochs and epoch_details_dir is not None and corr_per_target_all:
-        corr_per_target_arr = np.vstack(corr_per_target_all)
-        epoch_idx = np.arange(corr_per_target_arr.shape[0])[:, None]
-        np.savetxt(os.path.join(epoch_details_dir, "corr_per_target_all_epochs.csv"),
-                   np.hstack([epoch_idx, corr_per_target_arr]), delimiter=',')
-        np.savetxt(os.path.join(epoch_details_dir, "corr_sum_all_epochs.csv"),
-                   np.column_stack([epoch_idx, np.array(corr_sum_all)]), delimiter=',')
-
-        # Post-hoc: apply each epoch's saved model to Data_test (no test data touched during training)
-        if norm_stats and epoch_state_dicts:
-            print("Running post-hoc test inference for each epoch...")
-            Data_test_norm = [
-                (Data_test[i] - norm_stats[i][0]) / norm_stats[i][1]
-                for i in range(len(Data_test))
-            ]
-            test_tensors = [torch.FloatTensor(m) for m in Data_test_norm]
-            model.to('cpu')
-            for ep_idx, state_dict in enumerate(epoch_state_dicts):
-                epoch_dir = os.path.join(epoch_details_dir, f"epoch_{ep_idx:03d}")
-                test_out_dir = os.path.join(epoch_dir, "test_outputs")
-                os.makedirs(test_out_dir, exist_ok=True)
-                model.load_state_dict(state_dict)
-                model.eval()
-                with torch.no_grad():
-                    _, _, lat_test_ep, pred_test_ep, _ = model(x=test_tensors, device='cpu')
-                lat_test_ep_np = lat_test_ep.detach().numpy()
-                pred_test_ep_np = pred_test_ep.detach().numpy() * y_stds + y_mean
-                np.savetxt(os.path.join(test_out_dir, "lat_test.csv"), lat_test_ep_np, delimiter=',')
-                np.savetxt(os.path.join(test_out_dir, "pred_test.csv"), pred_test_ep_np, delimiter=',')
-            print("Post-hoc test inference complete.")
-
-    best_model.to('cpu')
-    last_model = model.to('cpu')
-
-    return pred_best, best_model, loss_all_test, best_corr, last_model, Data_train, Data_validation, Data_test, dictionaries
-
-def dictionary_learning_pytorch(X, n_components=100, lambda_l1=0.1, n_iter=20, lr=0.01, device='cpu'):
-    set_random_seeds()
-    Xt = torch.tensor(X, dtype=torch.float32, device=device)
-    N, M = X.shape
-    D = torch.randn(M, n_components, device=device)
-    D = D / (D.norm(dim=0, keepdim=True) + 1e-8)
-    A = torch.zeros(N, n_components, device=device)
-    for _ in range(n_iter):
-        A.requires_grad_()
-        optA = optim.SGD([A], lr=lr)
-        for _ in range(5):
-            optA.zero_grad()
-            recon = A.mm(D.t())
-            lossA = ((Xt - recon)**2).mean() + lambda_l1 * A.abs().mean()
-            lossA.backward()
-            optA.step()
-        A = A.detach()
-        ATA = A.t().mm(A) + 1e-8 * torch.eye(n_components, device=device)
-        XTA = Xt.t().mm(A)
-        D = XTA.mm(torch.inverse(ATA))
-        D = D / (D.norm(dim=0, keepdim=True) + 1e-8)
-    return D.cpu().numpy(), A.cpu().numpy()
-
-def apply_dictionary(D, X):
-    A = torch.zeros(X.shape[0], D.shape[1], requires_grad=True)
-    Dt = torch.tensor(D, dtype=torch.float32)
-    Xt = torch.tensor(X, dtype=torch.float32)
-    optA = optim.SGD([A], lr=0.01)
-    for _ in range(20):
-        optA.zero_grad()
-        recon = A.mm(Dt.t())
-        loss = ((Xt - recon)**2).mean() + 0.1 * A.abs().mean()
-        loss.backward()
-        optA.step()
-    return A.detach().cpu().numpy()
-
-
-def process_modality(i, X_train, dicl_dim, X_val, X_test):
-    D, A_train = dictionary_learning_pytorch(X_train, n_components=dicl_dim)
-    A_val = apply_dictionary(D, X_val)
-    A_test = apply_dictionary(D, X_test)
-    return i, D, A_train, A_val, A_test
-
-def parallel_dictionary_learning(Data_train, Data_validation, Data_test, dicl_dim, n_jobs=-1):
-    results = Parallel(n_jobs=n_jobs)(
-        delayed(process_modality)(i, Data_train[i], dicl_dim, Data_validation[i], Data_test[i])
-        for i in range(len(Data_train))
-    )
-    dicts = []
-    for i, D, A_tr, A_val, A_te in results:
-        Data_train[i]      = A_tr
-        Data_validation[i] = A_val
-        Data_test[i]       = A_te
-        dicts.append(D)
-    return dicts, Data_train, Data_validation, Data_test
-
-
-class load_Multimodal_data(Dataset):
-        def __init__(self, X, y=None, transform=None):
-            # A list of K data modalities, where each modality is a 2D array of size [N, M_k].
-            #X is a list of data of size [N,M_k]
-            self.X = X
-            junk=self.X[0] # not used
-            # Sets self.K as the number of modalities in the dataset (the length of X).
-            self.K = len(X)
-            #y is the label of size [N,Q]
-            self.y = y
-            
-            self.transform = transform # passed as a parameter, but not used
-            
-        def __len__(self):
-            # returns the total number of samples in the dataset.
-            # assume all modalities have the same number of samples
-            #return self.X[0].size()[0]
-            return len(self.X[0])
-        
-        def __getitem__(self, index):
-            # Initializes an empty list to store the multimodal data for a single sample.
-            image = []
-            # Iterates through each modality (self.X[i]) to collect the data for the specified index.
-            for i in range(0,self.K):
-                image.append(self.X[i][index,:])
-                
-            if self.y is not None:
-                # Converts the label for the given index to a PyTorch FloatTensor.
-                return image, torch.FloatTensor(self.y[index,:]).float()
-            else:
-                return image
-
-def get_model_param(x_train, x_test, y_train, y_test, best_model, get_sp_load=1):
-    y_train = np.atleast_2d(y_train)
-    y_test = np.atleast_2d(y_test)
-    if y_train.shape[0] == 1 and y_train.shape[1] > 1:
-        y_train = y_train.T
-    if y_test.shape[0] == 1 and y_test.shape[1] > 1:
-        y_test = y_test.T
+def get_model_param(x_train, x_test, y_train, y_test, best_model,
+                    get_sp_load=1):
+    y_train = _as_2d_targets(y_train)
+    y_test = _as_2d_targets(y_test)
     nmod = len(x_train)
+
+    best_model = best_model.to('cpu')
     best_model.eval()
-    modality_weights = F.softmax(torch.Tensor.cpu(best_model.mod_weight), dim=1).detach().numpy()
-    prediction_weights = torch.Tensor.cpu(best_model.weight_pred).detach().numpy()
+    modality_weights = F.softmax(best_model.mod_weight.detach(), dim=1).cpu().numpy()
+    prediction_weights = best_model.weight_pred.detach().cpu().numpy()
+
     print('Data Normalization...')
-    is_norm = True
-    if is_norm is True:
-        for i in range(0, len(x_train)):
-            x_mean = x_train[i].mean(axis=0)
-            x_stds = x_train[i].std(axis=0)
-            epsilon = 0.001
-            x_stds[x_stds == 0] = epsilon
-            x_train[i] = (x_train[i] - x_mean) / x_stds
-            x_test[i] = (x_test[i] - x_mean) / x_stds
+    train_norm, test_norm = [], []
+    for i in range(nmod):
+        tr = torch.as_tensor(x_train[i], dtype=torch.float32).clone()
+        te = torch.as_tensor(x_test[i], dtype=torch.float32).clone()
+        mean = tr.mean(dim=0)
+        try:
+            sd = tr.std(dim=0, correction=0)
+        except TypeError:
+            sd = tr.std(dim=0, unbiased=False)
+        sd = torch.where(sd == 0, torch.full_like(sd, 1e-3), sd)
+        train_norm.append((tr - mean) / sd)
+        test_norm.append((te - mean) / sd)
+
     y_mean = np.nanmean(y_train, axis=0)
     y_stds = np.nanstd(y_train, axis=0)
-    y_train = (y_train - y_mean) / y_stds
-    print('Done...')
-    _, _, lat_train, pred_train, _ = best_model(x=x_train, device='cpu')
-    _, _, lat_test, pred_test, _ = best_model(x=x_test, device='cpu')
-    lat_train = torch.Tensor.cpu(lat_train).detach().numpy()
-    lat_test = torch.Tensor.cpu(lat_test).detach().numpy()
-    pred_train = np.multiply(pred_train.detach().numpy(), y_stds) + y_mean
-    pred_test = np.multiply(pred_test.detach().numpy(), y_stds) + y_mean
+    y_stds[y_stds == 0] = 1.0
+    print('Done.')
 
-    pred_test = np.atleast_2d(pred_test)
-    y_test = np.atleast_2d(y_test)
+    with torch.no_grad():
+        _, _, lat_train_t, pred_train_t, _ = best_model(train_norm, 'cpu')
+        _, _, lat_test_t, pred_test_t, _ = best_model(test_norm, 'cpu')
 
+    lat_train = lat_train_t.cpu().numpy()
+    lat_test = lat_test_t.cpu().numpy()
+    pred_train = pred_train_t.cpu().numpy() * y_stds + y_mean
+    pred_test = pred_test_t.cpu().numpy() * y_stds + y_mean
+    pred_test = _as_2d_targets(pred_test)
 
-    # ensure plain ndarrays (not np.matrix) and consistent 2D shape
-    pred = np.asarray(pred_test)
-    yt   = np.asarray(y_test)
-    if pred.ndim == 1: pred = pred[:, None]
-    if yt.ndim   == 1: yt   = yt[:, None]
-    assert pred.shape == yt.shape, f"{pred.shape=} {yt.shape=}"
+    if pred_test.shape != y_test.shape:
+        raise ValueError(f"prediction shape {pred_test.shape} != target {y_test.shape}")
+    best_performance = np.array([
+        _safe_pearsonr(pred_test[:, i], y_test[:, i])
+        for i in range(pred_test.shape[1])
+    ])
 
-    # per‑target Pearson r (no lumping)
-    best_performance = np.array([scipy.stats.pearsonr(pred[:, i], yt[:, i])[0]
-                                for i in range(pred.shape[1])])
-
-    # best_performance = scipy.stats.pearsonr(pred_test, y_test)[0]
     spatial_loadings = []
     if get_sp_load == 1:
-        for i in range(0, nmod):
-            spatial_loadings.append(sKPCR_regression(lat_train, x_train[i].numpy(), np.ones((lat_train.shape[0], 1))))
-    return (lat_train, lat_test, spatial_loadings, modality_weights, prediction_weights, pred_train, pred_test, best_performance)
+        cov = np.ones((lat_train.shape[0], 1), dtype=np.float32)
+        for i in range(nmod):
+            spatial_loadings.append(
+                sKPCR_regression(lat_train, train_norm[i].numpy(), cov))
+
+    return (lat_train, lat_test, spatial_loadings, modality_weights,
+            prediction_weights, pred_train, pred_test, best_performance)
+
 
 def sKPCR_regression(X, Y, cov):
-    contrast = np.transpose(np.hstack((np.eye(X.shape[1], X.shape[1]), np.zeros((X.shape[1], cov.shape[1])))))
-    contrast = np.array(contrast, dtype='float32')
+    X = np.asarray(X, dtype=np.float64)
+    Y = np.asarray(Y, dtype=np.float64)
+    cov = np.asarray(cov, dtype=np.float64)
+    contrast = np.vstack((np.eye(X.shape[1]),
+                          np.zeros((cov.shape[1], X.shape[1]))))
     design = np.hstack((X, cov))
-    df = design.shape[0] - design.shape[1]
-    ss = np.linalg.inv(np.dot(np.transpose(design), design))
-    beta = np.dot(np.dot(ss, np.transpose(design)), Y)
-    Res = Y - np.dot(design, beta)
-    sigma = np.reshape(np.sqrt(np.divide(np.sum(np.square(Res), axis=0), df)), (1, beta.shape[1]))
-    tmp1 = np.dot(beta.T, contrast)
-    tmp2 = np.array(np.diag(np.dot(np.dot(contrast.T, ss), contrast)), ndmin=2)
-    Tstat = np.divide(tmp1, np.dot(sigma.T, np.sqrt(tmp2)))
-    return Tstat
+    df = design.shape[0] - np.linalg.matrix_rank(design)
+    if df <= 0:
+        raise ValueError("Non-positive regression degrees of freedom")
+    ss = np.linalg.pinv(design.T @ design)
+    beta = ss @ design.T @ Y
+    residual = Y - design @ beta
+    sigma = np.sqrt(np.sum(residual ** 2, axis=0) / float(df))[None, :]
+    numerator = beta.T @ contrast
+    contrast_var = np.diag(contrast.T @ ss @ contrast)[None, :]
+    denominator = sigma.T @ np.sqrt(np.maximum(contrast_var,
+                                                np.finfo(float).eps))
+    with np.errstate(divide='ignore', invalid='ignore'):
+        tstat = numerator / denominator
+    return np.nan_to_num(tstat, nan=0.0, posinf=0.0,
+                         neginf=0.0).astype(np.float32)
 
 
-
-def SBF_load(opts, behavioral_train, behavioral_test, behavioral_validation):
-    behavioral_train = np.atleast_2d(behavioral_train)
-    behavioral_test = np.atleast_2d(behavioral_test)
-    behavioral_validation = np.atleast_2d(behavioral_validation)
-    if behavioral_train.shape[0] == 1 and behavioral_train.shape[1] > 1:
-        behavioral_train = behavioral_train.T
-    if behavioral_test.shape[0] == 1 and behavioral_test.shape[1] > 1:
-        behavioral_test = behavioral_test.T
-    if behavioral_validation.shape[0] == 1 and behavioral_validation.shape[1] > 1:
-        behavioral_validation = behavioral_validation.T
-    allowed_modalities = opts.get('modalities_order', [])
-    data_directories = [os.path.join(opts['brain_data_main_folder'], d) for d in os.listdir(opts['brain_data_main_folder']) if os.path.isdir(os.path.join(opts['brain_data_main_folder'], d))]
-    data_directories = [d for d in data_directories if any((modality in os.path.basename(d) for modality in allowed_modalities))]
-    f = open(opts['output_dir'] + '/order_of_loaded_data.txt', 'w')
-    for i in range(len(data_directories)):
-        f.write(data_directories[i] + ' \n')
-    f.close()
-    paths2data = [a for a in range(len(data_directories))]
-    for folders in range(len(data_directories)):
-        sub_files = os.listdir(data_directories[folders])
-        for files in range(len(sub_files)):
-            fileName, fileExtension = os.path.splitext(sub_files[files])
-            if sub_files[files].endswith('.dtseries.nii'):
-                paths2data[folders] = os.path.join(data_directories[folders], sub_files[files])
-            elif fileExtension == '.gz' or fileExtension == '.mgh' or fileExtension == '.txt':
-                paths2data[folders] = os.path.join(data_directories[folders], sub_files[files])
-    list_of_arrays = [np.array(a) for a in range(0, len(paths2data))]
-    print(list_of_arrays)
-    Data_Modality = deepcopy(list_of_arrays)
-    mask = deepcopy(list_of_arrays)
-    filetypes = deepcopy(list_of_arrays)
-    names = deepcopy(list_of_arrays)
-    fsl_path = opts['fsl_path']
-    path2MNImask = fsl_path + 'data/standard/MNI152_T1_2mm_brain_mask.nii.gz'
-    img_MNI_mask = nib.load(path2MNImask)
-    MNI_mask = img_MNI_mask.get_fdata()
-    shape_MNI = MNI_mask.shape
-    shapes = {}
-    affine = {}
-    header = {}
-    cifti_brain_axes = {}
-    cifti_nifti_headers = {}
-    valid_train = ~pd.isna(behavioral_train).any(axis=1)
-    n_removed_train = np.sum(~valid_train)
-    valid_train = np.asarray(valid_train).ravel()
-    valid_test = ~pd.isna(behavioral_test).any(axis=1)
-    n_removed_test = np.sum(~valid_test)
-    valid_test = np.asarray(valid_test).ravel()
-    valid_validation = ~pd.isna(behavioral_validation).any(axis=1)
-    n_removed_validation = np.sum(~valid_validation)
-    valid_validation = np.asarray(valid_validation).ravel()
-    for i in range(0, len(paths2data)):
-        print('i = ', i)
-        fileName, fileExtension = os.path.splitext(paths2data[i])
-        if paths2data[i].endswith('.dtseries.nii'):
-            fileExtension = '.dtseries.nii'
-        print('loading data from modality number', i + 1, '=', fileName)
-        filetypes[i] = fileExtension
-        names[i] = fileName
-        if fileExtension == '.gz':
-            img = nib.load(paths2data[i])
-            Data_Modality[i] = img.get_fdata()
-            shape = Data_Modality[i].shape
-            shape2 = Data_Modality[i].shape[:3]
-            modality_name = os.path.basename(os.path.dirname(paths2data[i]))
-            shapes[modality_name] = shape2
-            affine[modality_name] = deepcopy(img.affine)
-            header[modality_name] = img.header.copy()
-            print('nii.gz masked raw shape: ', shape)
-            Data_Modality[i] = np.reshape(Data_Modality[i], [shape[0] * shape[1] * shape[2], shape[3]], order='F')
-            shape2d = Data_Modality[i].shape
-            print('nii.gz 2d flattened shape: ', shape2d)
-            mask_gz = MNI_mask
-            del img
-        elif fileExtension == '.txt':
-            Data_Modality[i] = np.loadtxt(paths2data[i])
-        elif fileExtension == '.mgh':
-            fs_path = opts['fs_path']
-            direct = os.path.dirname(paths2data[i])
-            infile = os.path.basename(paths2data[i])
-            new_name = list(infile)
-            new_name[0] = 'r'
-            right_side = direct + '/' + ''.join(new_name)
-            new_name[0] = 'l'
-            left_side = direct + '/' + ''.join(new_name)
-            print(f'{left_side}')
-            img1 = nib.load(left_side)
-            img2 = nib.load(right_side)
-            modality_name = os.path.basename(os.path.dirname(paths2data[i]))
-            affine[modality_name] = img1.affine
-            header[modality_name] = img1.header
-            vol = np.concatenate((img1.get_fdata(), img2.get_fdata()), 0)
-            data2d = np.reshape(vol, [vol.shape[0], vol.shape[3]], order='F')
-            del vol
-            NvoxPerHemi = data2d.shape[0] / 2
-            fs_path = opts['fs_path']
-            path_to_fsavg = opts['path_to_fsavg']
-            if NvoxPerHemi == 2562:
-                labelSrcDir = fs_path + '/subjects/fsaverage4/label/'
-            if NvoxPerHemi == 10242:
-                labelSrcDir = fs_path + '/subjects/fsaverage5/label/'
-            if NvoxPerHemi == 40962:
-                labelSrcDir = fs_path + '/subjects/fsaverage6/label/'
-            if NvoxPerHemi == 163842:
-                labelSrcDir = path_to_fsavg + '/label/'
-            mask[i] = np.ones(np.shape(data2d)[0])
-            needed_labels = ['lh.cortex.label', 'lh.Medial_wall.label', 'rh.cortex.label', 'rh.Medial_wall.label']
-            tmp = [np.array(a) for a in range(4)]
-            for fi in range(0, 4):
-                tmp[fi] = nib.freesurfer.io.read_label(labelSrcDir + needed_labels[fi], read_scalars=True)
-                tmp[fi] = tmp[fi][0] + 1 + (needed_labels[fi][0] == 'r') * NvoxPerHemi
-            mask[i][tmp[1].astype('int')] = 0
-            mask[i][tmp[3].astype('int')] = 0
-            mask_mgh = mask[i]
-            Data_Modality[i] = data2d[np.argwhere(mask[i][:] != 0)[:, 0], :]
-            del data2d
-        elif fileExtension == '.dtseries.nii':
-            img = nib.load(paths2data[i])
-            if not isinstance(img, nib.Cifti2Image):
-                raise TypeError(f"Expected Cifti2Image for {paths2data[i]}")
-            data = img.get_fdata()
-            if data.ndim != 2:
-                raise ValueError(f"Expected 2D dtseries data, got shape {data.shape}")
-            Data_Modality[i] = data.T
-            modality_name = os.path.basename(os.path.dirname(paths2data[i]))
-            base_modality = clean_modality_name(modality_name)
-            modality_key = base_modality + '_train'
-            cifti_brain_axes[modality_key] = img.header.get_axis(1)
-            cifti_nifti_headers[modality_key] = img.nifti_header.copy()
-            print('dtseries data shape (brain x time): ', Data_Modality[i].shape)
-        if '_Train_' in fileName:
-            print(f'Training group: Removing {n_removed_train} subjects with missing behavioral data.')
-            Data_Modality[i] = Data_Modality[i][:, valid_train]
-        elif '_Test_' in fileName:
-            print(f'Test group: Removing {n_removed_test} subjects with missing behavioral data.')
-            Data_Modality[i] = Data_Modality[i][:, valid_test]
-        elif '_Validation_' in fileName:
-            print(f'Validation group: Removing {n_removed_validation} subjects with missing behavioral data.')
-            Data_Modality[i] = Data_Modality[i][:, valid_validation]
-
-    behavioral_train = behavioral_train[valid_train, :]
-    behavioral_test = behavioral_test[valid_test, :]
-    behavioral_validation = behavioral_validation[valid_validation, :]
-    scaling_data_transform = [np.ndarray(a) for a in range(len(paths2data))]
-    for k in range(len(paths2data)):
-        Data_Modality[k] = Data_Modality[k] - np.matrix(np.mean(Data_Modality[k], 1)).T
-        scaling_data_transform[k] = rms(Data_Modality[k], [], [])
-        Data_Modality[k] = np.divide(Data_Modality[k], scaling_data_transform[k])
-    Data_Modality = [matrix.T for matrix in Data_Modality]
-    modalities = [os.path.basename(os.path.dirname(path)) for path in names]
-    masks_for_SBF_inputs = mask
-    masks_for_SBF_outputs = {}
-    if 'mask_mgh' in locals():
-        masks_for_SBF_outputs['mask_for_mgh'] = mask_mgh
-    if 'mask_gz' in locals():
-        masks_for_SBF_outputs['mask_for_gz'] = mask_gz
-    fileinfo = {'data_directories': data_directories, 'masks_for_SBF_inputs': masks_for_SBF_inputs, 'scaling_data_transform': scaling_data_transform, 'filetype': filetypes, 'names': names, 'affine': affine, 'header': header, 'shapes': shapes, 'masks_for_SBF_outputs': masks_for_SBF_outputs, 'cifti_brain_axes': cifti_brain_axes, 'cifti_nifti_headers': cifti_nifti_headers, 'behavioral_data': {'train': behavioral_train, 'test': behavioral_test, 'validation': behavioral_validation}}
-    return (Data_Modality, fileinfo, modalities)
-
-def rms(IN, dim, options):
-    if dim == []:
-        out = np.sqrt(np.sum(np.square(IN)) / IN.size)
-    else:
-        out = np.sqrt(np.divide(np.sum(np.square(IN), dim), IN.shape[dim]))
-    return out
-
-def SBF_save_everything(output_dir, spatial_loadings, img_info, opts, dictionaries):
-    if not os.path.isdir(output_dir):
-        os.mkdir(output_dir)
-    Z = spatial_loadings
-    for k, z_map_dict in enumerate(Z):
-        file_extension = opts['modalities_order_filetypes'][k]
-        D = dictionaries[k]
-        z_map_voxels = np.dot(D, z_map_dict)
-        z_map_voxels = np.asarray(z_map_voxels)
-        if file_extension == '.gz':
-            modality_name = opts['modalities_order'][k]
-            out_file_name = '/SBFOut_' + modality_name + '.nii.gz'
-            tmp_mask = img_info['masks_for_SBF_outputs']['mask_for_gz']
-            modality_key = modality_name + '_train'
-            if modality_key not in img_info['shapes']:
-                raise ValueError(f"Shape information not found for modality '{modality_key}' in img_info['shapes'].")
-            shape_MNI = img_info['shapes'][modality_key]
-            reshaped_out = np.zeros((*shape_MNI, z_map_voxels.shape[1]))
-            for i in range(z_map_voxels.shape[1]):
-                reshaped_out[:, :, :, i] = np.reshape(z_map_voxels[:, i], shape_MNI, order='F')
-            original_header = img_info['header'][modality_key]
-            img2save = nib.Nifti1Image(reshaped_out, affine=img_info['affine'][modality_key], header=original_header)
-            voxel_sizes = original_header.get_zooms()
-            img2save.header.set_zooms(voxel_sizes)
-            img2save = np.nan_to_num(img2save, nan=0.0)
-            outname = output_dir + out_file_name
-            nib.save(img2save, outname)
-            del tmp_mask
-        if file_extension == '.mgh':
-            modality_name = opts['modalities_order'][k]
-            out_file_name = modality_name + '.mgh'
-            tmp_mask = img_info['masks_for_SBF_outputs']['mask_for_mgh']
-            non_zero_vertex = np.where(tmp_mask != 0)[0]
-            out = np.tile(np.matrix(tmp_mask).T, z_map_voxels.shape[1])
-            out[non_zero_vertex, :] = z_map_voxels
-            N_vertex_per_side = tmp_mask.shape[0] / 2
-            out_left = np.expand_dims(np.expand_dims(out[range(int(N_vertex_per_side)), :], 1), 1)
-            out_file_name_lh = '/SBFOut_lh_' + out_file_name
-            outname = output_dir + out_file_name_lh
-            out_left = np.nan_to_num(out_left, nan=0.0)
-            img2save = nib.freesurfer.mghformat.MGHImage(out_left, affine=opts['SBFOut_affine'][k], header=opts['SBFOut_headers'][k], extra=None, file_map=None)
-            nib.save(img2save, outname)
-            out_right = np.expand_dims(np.expand_dims(out[int(N_vertex_per_side):int(2 * N_vertex_per_side), :], 1), 1)
-            out_file_name_rh = '/SBFOut_rh_' + out_file_name
-            outname = output_dir + out_file_name_rh
-            out_right = np.nan_to_num(out_right, nan=0.0)
-            img2save = nib.freesurfer.mghformat.MGHImage(out_right, affine=opts['SBFOut_affine'][k], header=opts['SBFOut_headers'][k], extra=None, file_map=None)
-            nib.save(img2save, outname)
-        if file_extension == '.dtseries.nii':
-            modality_name = opts['modalities_order'][k]
-            modality_key = modality_name + '_train'
-            out_file_name = '/SBFOut_' + modality_name + '.dtseries.nii'
-            if modality_key not in img_info['cifti_brain_axes']:
-                raise ValueError(f"CIFTI axis information not found for modality '{modality_key}'.")
-            brain_axis = img_info['cifti_brain_axes'][modality_key]
-            # Use a synthetic SeriesAxis to satisfy dtseries requirements.
-            series_axis = nib.cifti2.cifti2_axes.SeriesAxis(
-                start=0.0,
-                step=1.0,
-                size=z_map_voxels.shape[1],
-                unit='SECOND',
-            )
-            new_header = nib.cifti2.cifti2_axes.to_header((series_axis, brain_axis))
-            nifti_header = img_info['cifti_nifti_headers'].get(modality_key)
-            data = z_map_voxels.T
-            img2save = nib.Cifti2Image(data, header=new_header, nifti_header=nifti_header)
-            outname = output_dir + out_file_name
-            nib.save(img2save, outname)
-    return spatial_loadings
-
+# -------------------------------------------------------------------------
+# Data loading
+# -------------------------------------------------------------------------
 
 def clean_modality_name(modality_name):
-    # Remove common suffixes and return the base modality name
-    for suffix in ['_test', '_train', '_validation']:
+    modality_name = str(modality_name)
+    for suffix in ('_test', '_train', '_validation'):
         modality_name = modality_name.replace(suffix, '')
     return modality_name.strip()
+
+
 def sort_and_filter_by_modality_order(data_list, order):
-    # Normalize and clean the modality names in the order list
-    modality_index = {clean_modality_name(modality): index for index, modality in enumerate(order)}
+    index = {clean_modality_name(m): i for i, m in enumerate(order)}
+    filtered = [item for item in data_list
+                if clean_modality_name(item['modality']) in index]
+    return sorted(filtered,
+                  key=lambda item: index[clean_modality_name(item['modality'])])
 
-    # If there is a problem do print the normalized modality index for debugging
-    #print("Normalized Modality Index Map:", modality_index)
 
-    # Filter and sort the list
-    filtered_sorted_list = sorted(
-        [item for item in data_list if clean_modality_name(item['modality']) in modality_index],
-        key=lambda x: modality_index[clean_modality_name(x['modality'])]
-    )
+def rms(IN, dim, options):
+    del options
+    arr = np.asarray(IN)
+    if dim == []:
+        return np.sqrt(np.sum(np.square(arr)) / arr.size)
+    return np.sqrt(np.sum(np.square(arr), axis=dim) / arr.shape[dim])
 
-    # If your data lists come out in the wrong order, can use this for debugging to show what's being processed
-    #print("Items processed:",
-    #      [item['modality'] for item in data_list if clean_modality_name(item['modality']) in modality_index])
 
-    return filtered_sorted_list
+def SBF_load(opts, behavioral_train, behavioral_test,
+             behavioral_validation):
+    """Load NIfTI, MGH, text, dscalar, or dtseries SBF inputs."""
+    behavioral_train = _as_2d_targets(behavioral_train)
+    behavioral_test = _as_2d_targets(behavioral_test)
+    behavioral_validation = _as_2d_targets(behavioral_validation)
+
+    allowed = opts.get('modalities_order', [])
+    root = opts['brain_data_main_folder']
+    directories = [os.path.join(root, d) for d in sorted(os.listdir(root))
+                   if os.path.isdir(os.path.join(root, d))]
+    directories = [d for d in directories
+                   if any(m in os.path.basename(d) for m in allowed)]
+    if not directories:
+        raise FileNotFoundError(f"No modality directories under {root}")
+
+    os.makedirs(opts['output_dir'], exist_ok=True)
+    with open(os.path.join(opts['output_dir'], 'order_of_loaded_data.txt'), 'w') as f:
+        for d in directories:
+            f.write(d + ' \n')
+
+    suffixes = ('.dscalar.nii', '.dtseries.nii', '.nii.gz', '.mgh', '.txt')
+
+    def infer_ext(path):
+        if path.endswith('.dscalar.nii'):
+            return '.dscalar.nii'
+        if path.endswith('.dtseries.nii'):
+            return '.dtseries.nii'
+        if path.endswith('.nii.gz'):
+            return '.gz'
+        return os.path.splitext(path)[1]
+
+    def choose_file(folder):
+        files = sorted(os.listdir(folder))
+        preferred = [('.nii.gz' if s == '.gz' else s)
+                     for s in opts.get('modalities_order_filetypes', [])]
+        preferred += list(suffixes)
+        seen = set()
+        for suffix in preferred:
+            if suffix in seen:
+                continue
+            seen.add(suffix)
+            matches = [os.path.join(folder, f) for f in files
+                       if f.endswith(suffix)]
+            if len(matches) > 1:
+                raise RuntimeError(f"Multiple {suffix} files in {folder}: {matches}")
+            if matches:
+                return matches[0]
+        return None
+
+    paths = [choose_file(d) for d in directories]
+    missing = [directories[i] for i, p in enumerate(paths) if p is None]
+    if missing:
+        raise FileNotFoundError("No supported file in:\n" + '\n'.join(missing))
+    print('Files selected for loading:')
+    for path in paths:
+        print('  ' + path)
+
+    data = [None] * len(paths)
+    masks = [None] * len(paths)
+    filetypes = [None] * len(paths)
+    names = [None] * len(paths)
+    shapes, affine, header = {}, {}, {}
+    cifti_axes, cifti_nifti_headers, cifti_kinds = {}, {}, {}
+
+    valid_train = np.asarray(~pd.isna(behavioral_train).any(axis=1)).ravel()
+    valid_test = np.asarray(~pd.isna(behavioral_test).any(axis=1)).ravel()
+    valid_val = np.asarray(~pd.isna(behavioral_validation).any(axis=1)).ravel()
+    removed = {'train': int(np.sum(~valid_train)),
+               'test': int(np.sum(~valid_test)),
+               'validation': int(np.sum(~valid_val))}
+
+    mni_mask = None
+    if any(p.endswith('.nii.gz') for p in paths):
+        mni_path = os.path.join(opts['fsl_path'], 'data', 'standard',
+                                'MNI152_T1_2mm_brain_mask.nii.gz')
+        mni_mask = nib.load(mni_path).get_fdata()
+    mask_gz, mask_mgh = None, None
+
+    for i, path in enumerate(paths):
+        print('i = ', i)
+        ext = infer_ext(path)
+        filetypes[i], names[i] = ext, path
+        modality_name = os.path.basename(os.path.dirname(path))
+        base = clean_modality_name(modality_name)
+        key = base + '_train'
+        print('loading data from modality number', i + 1, '=', path)
+
+        if ext == '.gz':
+            img = nib.load(path)
+            raw = np.asarray(img.get_fdata())
+            if raw.ndim != 4:
+                raise ValueError(f"Expected 4D NIfTI, got {raw.shape}")
+            shape3 = raw.shape[:3]
+            shapes[modality_name] = shapes[key] = shape3
+            affine[modality_name] = deepcopy(img.affine)
+            affine[key] = deepcopy(img.affine)
+            header[modality_name] = img.header.copy()
+            header[key] = img.header.copy()
+            data[i] = np.reshape(raw, (np.prod(shape3), raw.shape[3]), order='F')
+            mask_gz = mni_mask
+
+        elif ext == '.txt':
+            loaded = np.asarray(np.loadtxt(path))
+            data[i] = loaded[:, None] if loaded.ndim == 1 else loaded
+
+        elif ext == '.mgh':
+            folder, infile = os.path.dirname(path), os.path.basename(path)
+            left_path = os.path.join(folder, 'l' + infile[1:])
+            right_path = os.path.join(folder, 'r' + infile[1:])
+            left, right = nib.load(left_path), nib.load(right_path)
+            affine[modality_name] = affine[key] = left.affine
+            header[modality_name] = header[key] = left.header
+            vol = np.concatenate((left.get_fdata(), right.get_fdata()), axis=0)
+            data2d = np.reshape(vol, (vol.shape[0], vol.shape[3]), order='F')
+            masks[i] = np.ones(data2d.shape[0], dtype=np.float32)
+            mask_mgh = masks[i].copy()
+            data[i] = data2d
+
+        elif ext in ('.dscalar.nii', '.dtseries.nii'):
+            img = nib.load(path)
+            if not isinstance(img, nib.Cifti2Image):
+                raise TypeError(f"Expected Cifti2Image for {path}")
+            raw = np.asarray(img.get_fdata())
+            if raw.ndim != 2:
+                raise ValueError(f"Expected 2D CIFTI, got {raw.shape}")
+            axes = [img.header.get_axis(a) for a in range(raw.ndim)]
+            brain_index = next((a for a, axis in enumerate(axes)
+                                if axis.__class__.__name__ == 'BrainModelAxis'), 1)
+            if brain_index == 1:
+                data[i], brain_axis = raw.T, axes[1]
+            elif brain_index == 0:
+                data[i], brain_axis = raw, axes[0]
+            else:
+                raise ValueError(f"Unexpected CIFTI brain axis {brain_index}")
+            header[modality_name] = header[key] = img.header
+            affine[modality_name] = affine[key] = None
+            cifti_axes[modality_name] = cifti_axes[key] = brain_axis
+            cifti_nifti_headers[modality_name] = img.nifti_header.copy()
+            cifti_nifti_headers[key] = img.nifti_header.copy()
+            cifti_kinds[modality_name] = cifti_kinds[key] = ext
+            print(f"{ext} raw shape: {raw.shape}")
+            print(f"{ext} oriented shape (brain x subjects/maps): {data[i].shape}")
+        else:
+            raise ValueError(f"Unsupported extension {ext}")
+
+        lower_dir, lower_path = modality_name.lower(), path.lower()
+        if '_train' in lower_dir or '_train_' in lower_path:
+            mask, split = valid_train, 'train'
+        elif '_test' in lower_dir or '_test_' in lower_path:
+            mask, split = valid_test, 'test'
+        elif '_validation' in lower_dir or '_validation_' in lower_path:
+            mask, split = valid_val, 'validation'
+        else:
+            raise ValueError(f"Cannot identify split for {path}")
+        if data[i].shape[1] != len(mask):
+            raise ValueError(f"{split} subject mismatch for {path}: "
+                             f"{data[i].shape[1]} columns vs {len(mask)} targets")
+        print(f"{split.capitalize()} group: Removing {removed[split]} subjects "
+              "with missing behavioral data.")
+        data[i] = data[i][:, mask]
+
+    behavioral_train = behavioral_train[valid_train]
+    behavioral_test = behavioral_test[valid_test]
+    behavioral_validation = behavioral_validation[valid_val]
+
+    scales = [None] * len(data)
+    for i in range(len(data)):
+        matrix = np.asarray(data[i], dtype=np.float32)
+        matrix -= np.mean(matrix, axis=1, keepdims=True)
+        scale = float(rms(matrix, [], []))
+        if not np.isfinite(scale) or scale == 0:
+            scale = 1.0
+        scales[i] = scale
+        data[i] = matrix / scale
+    data = [matrix.T for matrix in data]
+
+    modalities = [os.path.basename(os.path.dirname(path)) for path in names]
+    output_masks = {}
+    if mask_mgh is not None:
+        output_masks['mask_for_mgh'] = mask_mgh
+    if mask_gz is not None:
+        output_masks['mask_for_gz'] = mask_gz
+
+    info = {
+        'data_directories': directories,
+        'masks_for_SBF_inputs': masks,
+        'scaling_data_transform': scales,
+        'filetype': filetypes,
+        'names': names,
+        'affine': affine,
+        'header': header,
+        'shapes': shapes,
+        'masks_for_SBF_outputs': output_masks,
+        'cifti_brain_axes': cifti_axes,
+        'cifti_nifti_headers': cifti_nifti_headers,
+        'cifti_output_kinds': cifti_kinds,
+        'behavioral_data': {
+            'train': behavioral_train,
+            'test': behavioral_test,
+            'validation': behavioral_validation,
+        },
+    }
+    return data, info, modalities
+
+# -------------------------------------------------------------------------
+# Output reconstruction
+# -------------------------------------------------------------------------
+
+def SBF_save_everything(output_dir, spatial_loadings, img_info, opts,
+                        dictionaries):
+    os.makedirs(output_dir, exist_ok=True)
+
+    for k, z_map_dictionary in enumerate(spatial_loadings):
+        ext = opts['modalities_order_filetypes'][k]
+        modality = opts['modalities_order'][k]
+        key = modality + '_train'
+        z_map_features = np.asarray(np.dot(dictionaries[k], z_map_dictionary))
+
+        if ext == '.gz':
+            if key not in img_info['shapes']:
+                raise ValueError(f"No shape information for {key}")
+            shape3 = img_info['shapes'][key]
+            reshaped = np.zeros((*shape3, z_map_features.shape[1]),
+                                dtype=np.float32)
+            for component in range(z_map_features.shape[1]):
+                reshaped[..., component] = np.reshape(
+                    z_map_features[:, component], shape3, order='F')
+            image = nib.Nifti1Image(
+                np.nan_to_num(reshaped),
+                affine=img_info['affine'][key],
+                header=img_info['header'][key].copy())
+            nib.save(image, os.path.join(output_dir,
+                                         f'SBFOut_{modality}.nii.gz'))
+
+        elif ext == '.mgh':
+            mask = img_info['masks_for_SBF_outputs']['mask_for_mgh']
+            nonzero = np.flatnonzero(mask != 0)
+            full = np.tile(np.asarray(mask)[:, None],
+                           (1, z_map_features.shape[1]))
+            full[nonzero] = z_map_features
+            half = len(mask) // 2
+            left = np.nan_to_num(full[:half, :, None, None]
+                                 .transpose(0, 2, 3, 1)).astype(np.float32)
+            right = np.nan_to_num(full[half:, :, None, None]
+                                  .transpose(0, 2, 3, 1)).astype(np.float32)
+            affine = img_info['affine'][key]
+            header = img_info['header'][key]
+            nib.save(nib.freesurfer.mghformat.MGHImage(
+                left, affine=affine, header=header),
+                os.path.join(output_dir, f'SBFOut_lh_{modality}.mgh'))
+            nib.save(nib.freesurfer.mghformat.MGHImage(
+                right, affine=affine, header=header),
+                os.path.join(output_dir, f'SBFOut_rh_{modality}.mgh'))
+
+        elif ext in ('.dscalar.nii', '.dtseries.nii'):
+            if key not in img_info['cifti_brain_axes']:
+                raise ValueError(f"No CIFTI brain axis for {key}")
+            brain_axis = img_info['cifti_brain_axes'][key]
+            nifti_header = img_info['cifti_nifti_headers'].get(key)
+            cifti_data = np.nan_to_num(z_map_features.T).astype(np.float32)
+
+            if ext == '.dscalar.nii':
+                names = [f'SBF_component_{i+1:03d}'
+                         for i in range(cifti_data.shape[0])]
+                map_axis = nib.cifti2.cifti2_axes.ScalarAxis(names)
+                outname = f'SBFOut_{modality}.dscalar.nii'
+            else:
+                map_axis = nib.cifti2.cifti2_axes.SeriesAxis(
+                    start=0.0, step=1.0, size=cifti_data.shape[0],
+                    unit='SECOND')
+                outname = f'SBFOut_{modality}.dtseries.nii'
+
+            new_header = nib.cifti2.cifti2_axes.to_header(
+                (map_axis, brain_axis))
+            image = nib.Cifti2Image(cifti_data, header=new_header,
+                                    nifti_header=nifti_header)
+            nib.save(image, os.path.join(output_dir, outname))
+
+        elif ext == '.txt':
+            np.savetxt(os.path.join(output_dir,
+                                    f'SBFOut_{modality}.txt'),
+                       z_map_features)
+        else:
+            raise ValueError(f"Unsupported output extension: {ext}")
+
+    return spatial_loadings
