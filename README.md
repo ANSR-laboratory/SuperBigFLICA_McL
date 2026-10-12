@@ -1,22 +1,108 @@
-# SuperBigFLICA (SBF)
+# SuperBigFLICA
 
-[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Alzheimer's & Dementia](https://img.shields.io/badge/Alzheimer's%20%26%20Dementia-10.1002%2Fdad2.70360-blue)](http://dx.doi.org/10.1002/dad2.70360)
+SuperBigFLICA is a semi-supervised framework for multimodal neuroimaging data fusion. It learns shared latent components and modality-specific spatial maps while predicting a clinical or behavioral target.
 
-> **Semi-supervised multimodal neuroimaging data fusion** that simultaneously learns interpretable spatial brain components and predicts clinical outcomes — enabling both discovery and prediction from multi-modal brain imaging data.
+The current pipeline learns fresh dictionaries, uses fixed equal loss weights, and selects a model checkpoint using validation R² with prediction-quality checks. Training and held-out test evaluation are separate steps. Saved dictionaries and preprocessing state support projection of aligned external cohorts.
 
-<p align="center">
-  <img src="figures/overview.png" width="85%" alt="SuperBigFLICA overview">
-</p>
+**Versions.** This is the current version of the pipeline (October 2026). For the repository snapshot from the period of the 2026 DADM publication, see tag v1.0-DADM-2026. A correction to the published results is in preparation; this page will link to it once available.
 
-## Features
+## Installation
 
-- Semi-supervised multimodal brain imaging fusion via joint matrix decomposition
-- Simultaneously learns interpretable spatial brain components and predicts clinical outcomes
-- Supports NIfTI (`.nii.gz`), FreeSurfer surface (`.mgh`), CIFTI (`.dtseries.nii`), and plain text matrix (`.txt`) inputs
-- Train / validation / test split workflow with per-epoch validation tracking
-- Saves spatial component maps in native file formats for direct use in neuroimaging tools
+Use Python 3.11 in an isolated environment:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt         # Linux
+# On macOS, use: pip install -r requirements.macos.txt
+```
+
+Install FSL and FreeSurfer, then configure their paths:
+
+```bash
+export FSLDIR=/path/to/fsl
+export FREESURFER_HOME=/path/to/freesurfer
+```
+
+The loader uses the FreeSurfer `fsaverage` cortex support. Run `python Scripts/run_end_to_end.py --help` to see the training options.
+
+## Prepare inputs
+
+The supplied workflow is configured for five ADNI modalities: cortical thickness (CT), tau PET (TAU), pial surface area (PSA), gray matter (GM), and amyloid PET (AMY). It expects 192 training, 41 validation, and 41 test participants.
+
+Create a training view containing ten folders, one per modality and split:
+
+```text
+train_validation_view/
+├── CT_train/           CT_validation/
+├── TAU_train/          TAU_validation/
+├── PSA_train/          PSA_validation/
+├── GM_train/           GM_validation/
+└── AMY_train/          AMY_validation/
+```
+
+CT and PSA use paired left/right hemisphere MGH files; TAU, GM, and AMY use NIfTI files. Participant columns must follow the same order across all modalities and their corresponding headerless numeric target CSVs. Keep test folders outside the training view.
+
+## Run training
+
+```bash
+python Scripts/run_end_to_end.py \
+  --round 3 --seed 777 --output /path/to/run/results/round3_seed777 \
+  --input-view /path/to/train_validation_view \
+  --target-train /path/to/nIDP_CDRSB_matrix_training.csv \
+  --target-validation /path/to/nIDP_CDRSB_matrix_validation.csv \
+  --dictionary-dim 250 --epochs 120 --device cpu
+```
+
+The workflow uses 50 latent components and trains through epochs 0–120. The output directory must be new. `Scripts/SBF.py` accepts the same command-line arguments as a compatibility entry point.
+
+For all ten rounds on a SLURM cluster, activate your environment, configure FSL/FreeSurfer, and set these absolute paths:
+
+```bash
+export SBF_RUN_ROOT=/path/to/run
+export SBF_INPUT_VIEW=/path/to/train_validation_view
+export SBF_TARGET_ROOT=/path/to/target_csvs
+export SBF_SCRIPTS_DIR=/path/to/SuperBigFLICA_McL/Scripts
+mkdir -p logs
+sbatch Scripts/RUN_SBF_sbatch.sh
+```
+
+The array uses seeds 555, 666, 777, 888, 999, 1111, 2222, 3333, 4444, and 5555. Adjust cluster resource directives for your environment.
+
+## Validate and evaluate
+
+After all ten rounds finish, validate their outputs:
+
+```bash
+python Scripts/validate_and_summarize.py /path/to/run
+```
+
+After validation passes, evaluate a frozen model on the test set:
+
+```bash
+python Scripts/evaluate_locked_test.py \
+  --root /path/to/run --round 3 \
+  --input-view /path/to/all_split_view \
+  --target-root /path/to/target_csvs
+```
+
+The evaluation view must contain all fifteen modality/split folders (`_train`, `_validation`, and `_test`). The target folder must contain `nIDP_CDRSB_matrix_training.csv`, `nIDP_CDRSB_matrix_validation.csv`, and `nIDP_CDRSB_matrix_test.csv`. Use validation data for tuning and checkpoint selection; reserve test data for evaluation.
+
+For external-cohort inference, run `python Scripts/project_external_cohort.py --help`. Supply aligned participant-by-feature matrices and the saved projection bundle.
+
+A quick synthetic check is available without participant data:
+
+```bash
+python Scripts/smoke_test.py
+```
+
+## Outputs and privacy
+
+Each training round saves configuration records, the selected checkpoint, dictionaries and projection state, latent components, predictions, training history, and modality-specific component maps. Separate test evaluation saves test loadings, predictions, and aggregate performance metrics.
+
+Spatial maps are raw backprojected regression maps, not standardized z maps or significance maps.
+
+This repository distributes code, not participant data or trained checkpoints. Keep inputs, participant identifiers, loading/prediction tables, arrays, and model outputs in private storage. `.gitignore` excludes common data and output formats, checkpoints, runtime logs, and `.claude/`. Review files before committing: ignore rules do not remove files already tracked by Git.
 
 ## Citation
 
@@ -56,123 +142,7 @@ If you use this codebase in your research, please also cite:
 }
 ```
 
-## Requirements
-
-**Python:** ≥ 3.11 (Linux) / ≥ 3.10 (macOS)
-
-**Python packages** (see `requirements.txt` / `requirements.macos.txt`):
-- `torch`, `numpy`, `nibabel`, `scipy`, `scikit-learn`, `pandas`, `matplotlib`, `joblib`
-
-**External tools** (must be installed and on PATH):
-- [FSL](https://fsl.fmrib.ox.ac.uk/) — required for MNI152 brain mask (NIfTI modalities)
-- [FreeSurfer](https://surfer.nmr.mgh.harvard.edu/) — required for `.mgh` surface file processing
-
-## Getting Started
-
-### 1. Install dependencies
-
-```bash
-pip install -r requirements.txt         # Linux (Python ≥ 3.11)
-pip install -r requirements.macos.txt   # macOS (Python ≥ 3.10)
-```
-
-### 2. Set environment variables
-
-```bash
-export FSLDIR=/path/to/fsl
-export FREESURFER_HOME=/path/to/freesurfer
-export FSAVERAGE_PATH=/path/to/fsaverage
-```
-
-### 3. Configure and run
-
-Edit `Scripts/SBF.py` to set your data paths and parameters, then:
-
-```bash
-python Scripts/SBF.py
-```
-
-For SLURM cluster submission, use `Scripts/RUN_SBF_sbatch.sh`.
-
-## Data Structure
-
-The root data folder (`opts["brain_data_main_folder"]` in `Scripts/SBF.py`) should contain one subfolder per modality per split, plus behavioral CSV files:
-
-```
-<data_folder>/                                    # e.g., ../forKayla/
-├── nIDPs_train_totalMJ.csv                      # Behavioral targets — train
-├── nIDPs_validation_totalMJ.csv                 # Behavioral targets — validation
-├── nIDPs_test_totalMJ.csv                       # Behavioral targets — test
-├── <MODALITY>_train/
-│   └── <data_file>.(nii.gz|mgh|dtseries.nii|txt)
-├── <MODALITY>_validation/
-│   └── <data_file>.(nii.gz|mgh|dtseries.nii|txt)
-└── <MODALITY>_test/
-    └── <data_file>.(nii.gz|mgh|dtseries.nii|txt)
-```
-
-Outputs are written to `opts["output_dir"]` (default: `Data/SBF_outputs/`):
-
-```
-Data/SBF_outputs/
-├── SBFOut_<MODALITY>.nii.gz        # Spatial component maps (NIfTI)
-├── SBFOut_lh_<MODALITY>.mgh        # Left-hemisphere component maps (FreeSurfer surface)
-├── SBFOut_rh_<MODALITY>.mgh        # Right-hemisphere component maps (FreeSurfer surface)
-├── SBFOut_<MODALITY>.dtseries.nii  # Spatial component maps (CIFTI)
-├── lat_train.csv                   # Latent components — training set
-├── lat_test.csv                    # Latent components — independent test set
-├── pred_valid.csv                  # Predicted nIDPs — validation set (best epoch)
-├── pred_train.csv                  # Predicted nIDPs — training set (best model)
-├── pred_test.csv                   # Predicted nIDPs — independent test set (best model)
-├── modality_weights.csv            # Per-modality contributions to each latent component
-├── prediction_weights.csv          # Weights mapping latent components to nIDPs
-├── SBF_best_model.pth              # Model checkpoint with best validation performance
-├── SBF_final_model.pth             # Model checkpoint from the final training epoch
-├── loss_all_test.csv               # Per-epoch validation loss (4 components)
-├── test_corr.txt                   # Best Pearson r on the validation set (used to select best model)
-├── best_performance.csv            # Pearson r on the independent test set using the best model
-└── order_of_loaded_data.txt        # Log of data file loading order
-```
-
-### Output file descriptions
-
-| File | Description |
-|------|-------------|
-| `SBFOut_<MODALITY>.*` | Spatial component maps for each modality. Each map has `nlat` components; voxel/vertex values are spatial loadings from regressing `lat_train` onto the original imaging data. One file per modality in the modality's native format (`.nii.gz`, `.mgh`, or `.dtseries.nii`). |
-| `lat_train.csv` | Multimodal shared latent components for training subjects (subjects × `nlat`). Use these to correlate or predict other nIDPs not used during training. |
-| `lat_test.csv` | Multimodal shared latent components for independent test subjects (subjects × `nlat`), produced by applying the best model to the test set. |
-| `pred_valid.csv` | Predicted nIDPs for validation subjects at the epoch that achieved the best validation correlation. This is the output of the training loop's internal validation. |
-| `pred_train.csv` | Predicted nIDPs for training subjects using the best model. |
-| `pred_test.csv` | Predicted nIDPs for independent test subjects using the best model. |
-| `modality_weights.csv` | `nlat` × modality matrix. Each value is the contribution (softmax-normalized weight) of a modality to a given latent component. |
-| `prediction_weights.csv` | `nlat` × `#nIDPs` matrix. Trained linear weights mapping latent components to predicted nIDPs. |
-| `SBF_best_model.pth` | PyTorch state dict for the model epoch that achieved the highest validation correlation. Use this for downstream inference. |
-| `SBF_final_model.pth` | PyTorch state dict from the last training epoch (may not be the best-performing epoch). |
-| `loss_all_test.csv` | Per-epoch validation loss broken into 4 components: reconstruction loss, spatial loading regularization, MSE prediction loss, and prediction weight regularization. |
-| `test_corr.txt` | Best Pearson r achieved on the **validation set** during training. For a single nIDP this is the correlation; for multiple nIDPs it is the sum of per-target correlations exceeding 0.1. This value is used to select `SBF_best_model.pth`. |
-| `best_performance.csv` | Pearson r between predicted and actual nIDPs on the **independent test set**, computed post-training using `SBF_best_model.pth`. One value per nIDP. This is the held-out generalization metric. |
-| `order_of_loaded_data.txt` | Log of the file paths and order in which imaging data were loaded. Useful for debugging modality alignment. |
-
-## Project Structure
-
-```
-SuperBigFLICA_McL/
-├── Scripts/                # Main scripts (SBF.py, sbf_utils.py, RUN_SBF_sbatch.sh)
-├── Data/                   # Input data folder
-├── figures/                # Overview figures
-├── Slides/                 # Presentation materials
-├── Visualizations/         # Output visualization utilities
-├── model_cards/            # Documentation for trained models
-├── requirements.txt        # Linux dependencies
-└── requirements.macos.txt  # macOS dependencies
-```
-
-## Model Cards
-
-Pre-trained model documentation:
-
-- [SBF CDR-SOB ADNI3](model_cards/sbf_cdrsob_adni3_MODEL_CARD.md) — SuperBigFLICA trained on ADNI3 multimodal neuroimaging to predict Clinical Dementia Rating Sum of Boxes (CDR-SOB)
 
 ## License
 
-This project is licensed under the MIT License — see [LICENSE](LICENSE) for details.
+MIT — see [LICENSE](LICENSE).

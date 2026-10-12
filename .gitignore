@@ -14,3 +14,52 @@ GM_test/
 GM_train/
 GM_validation/
 Scripts/__pycache__/
+
+# Local assistant state (never publish)
+.claude/
+
+# Local datasets and run products (all directory levels)
+[Dd]ata/
+inputs/
+outputs/
+results/
+SBF_outputs/
+epoch_details/
+checkpoints/
+
+# Participant tables, identifiers, predictions and loading matrices
+# Conservative: all tabular files remain local; approve synthetic fixtures explicitly.
+*.csv
+*.tsv
+*.xlsx
+*.xls
+*.parquet
+*.feather
+lat_*.txt
+pred_*.txt
+*subject*ids*.txt
+*participant*ids*.txt
+*row*identit*.txt
+order_of_loaded_data.txt
+
+# Arrays, serialized models/caches and neuroimaging inputs/outputs
+*.npy
+*.npz
+*.pth
+*.pt
+*.pkl
+*.pickle
+*.joblib
+*.RData
+*.rds
+*.nii
+*.nii.gz
+*.mgh
+*.mgz
+*.h5
+*.hdf5
+
+# Runtime logs
+*.log
+*.out
+*.err

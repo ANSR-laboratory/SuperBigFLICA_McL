@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import copy
+import json
 import os
 import random
 import time
 from copy import deepcopy
+from pathlib import Path
 
 import nibabel as nib
 import numpy as np
@@ -18,6 +20,16 @@ import torch.nn.functional as F
 from joblib import Parallel, delayed
 from torch import optim
 from torch.utils.data import DataLoader, Dataset
+
+
+def load_nidp_csv(path):
+    """Load a numeric CSV as subjects by variables, preserving missing cells."""
+    values = np.genfromtxt(path, delimiter=',', dtype=np.float64)
+    if values.ndim == 0:
+        values = values.reshape(1, 1)
+    elif values.ndim == 1:
+        values = values[:, None]
+    return values
 
 
 def set_random_seeds(seed=42):
@@ -185,74 +197,202 @@ class SupervisedFLICAmodel(nn.Module):
         return outputs, self.spatial_loading, latent, pred, self.weight_pred
 
 
+def _nets_zscore_exact(x):
+    """Column z-score used by the released SuperBigFLICA mMIGP code."""
+    x = np.asarray(x, dtype=np.float64)
+    centered = x - np.mean(x, axis=0, keepdims=True)
+    std = np.std(x, axis=0, ddof=0)
+    std[std == 0] = 0.1
+    return centered / std
+
+
+def MultiModality_MIGP_faster_exact(x, k):
+    """Exact small-N algebra of the released multimodal MIGP initializer.
+
+    This follows ``MultiModality_MIGP_faster`` from Gong et al.'s released
+    SuperBigFLICA code.  For N=192 it evaluates the full subject covariance,
+    so no incremental approximation or subject ordering is involved.
+    """
+    arrays = [np.asarray(item, dtype=np.float64) for item in x]
+    n_subjects = arrays[0].shape[0]
+    if k <= 0 or k >= n_subjects:
+        raise ValueError(f"mMIGP k must be in [1, {n_subjects - 1}], got {k}")
+    covariance = np.zeros((n_subjects, n_subjects), dtype=np.float64)
+    for data in arrays:
+        standardized = _nets_zscore_exact(data)
+        covariance += standardized @ standardized.T / data.shape[1]
+    eigenvalues, eigenvectors = scipy.linalg.eigh(
+        covariance, subset_by_index=(n_subjects - k, n_subjects - 1))
+    order = np.argsort(eigenvalues)[::-1]
+    eigenvalues = np.real(eigenvalues[order])
+    eigenvectors = np.real(eigenvectors[:, order])
+    # The released code returns U * eigenvalue, then its initializer
+    # column-normalizes this matrix before the modality back-projections.
+    return eigenvectors * eigenvalues[np.newaxis, :], eigenvalues
+
+
 def Initialize_SuperBigFLICA(x_train, y_train, nlat, train_ind=None):
+    """Released multimodal-MIGP initialization, isolated for sensitivity."""
     del train_ind
-    y_train = _as_2d_targets(y_train)
-    spatial, latent_sets = [], []
-    for x in x_train:
-        x = np.asarray(x, dtype=np.float64)
-        _, _, vt = np.linalg.svd(x, full_matrices=False)
-        loading = vt[:min(nlat, vt.shape[0]), :].T
-        if loading.shape[1] < nlat:
-            loading = np.pad(loading, ((0, 0), (0, nlat-loading.shape[1])))
-        spatial.append(loading.astype(np.float32))
-        latent_sets.append(x @ loading)
-    common = np.mean(latent_sets, axis=0)
-    valid = np.isfinite(y_train).all(axis=1)
-    design = np.column_stack((common[valid], np.ones(np.sum(valid))))
-    coef = np.linalg.pinv(design) @ y_train[valid]
-    return spatial, coef[:-1].astype(np.float32), coef[-1:].astype(np.float32), common
+    y_train = _as_2d_targets(y_train).astype(np.float64)
+    mmigp_scaled, eigenvalues = MultiModality_MIGP_faster_exact(
+        x_train, nlat)
+    norms = np.sqrt(np.sum(mmigp_scaled ** 2, axis=0, keepdims=True))
+    if np.any(norms <= 0) or not np.isfinite(norms).all():
+        raise RuntimeError("mMIGP produced zero or non-finite component norm")
+    mmigp_unit = mmigp_scaled / norms
+    spatial = [
+        (np.asarray(data, dtype=np.float64).T @ (mmigp_unit / norms))
+        .astype(np.float32)
+        for data in x_train
+    ]
+    y_filled = y_train.copy()
+    y_filled[~np.isfinite(y_filled)] = 0.0
+    common = np.zeros((x_train[0].shape[0], nlat), dtype=np.float64)
+    for data, loading in zip(x_train, spatial):
+        common += np.asarray(data, dtype=np.float64) @ loading
+    common_z = _nets_zscore_exact(common)
+    design = np.column_stack((common_z, np.ones(common_z.shape[0])))
+    coef = np.linalg.pinv(design) @ y_filled
+    diagnostics = {
+        "method": "released_multimodality_migp_faster_small_n_algebra",
+        "n_subjects": int(x_train[0].shape[0]),
+        "n_modalities": int(len(x_train)),
+        "n_components": int(nlat),
+        "eigenvalues": eigenvalues.tolist(),
+        "covariance_effective_rank": int(np.linalg.matrix_rank(
+            sum(
+                _nets_zscore_exact(data) @ _nets_zscore_exact(data).T /
+                data.shape[1]
+                for data in x_train
+            )
+        )),
+        "unit_basis_orthogonality_max_abs_error": float(np.max(np.abs(
+            mmigp_unit.T @ mmigp_unit - np.eye(nlat)
+        ))),
+        "initial_common_abs_max": float(np.max(np.abs(common_z))),
+        "initial_prediction_weight_abs_max": float(np.max(np.abs(coef[:-1]))),
+    }
+    return (spatial, coef[:-1].astype(np.float32),
+            coef[-1:].astype(np.float32), mmigp_unit.astype(np.float32),
+            diagnostics)
 
 # -------------------------------------------------------------------------
 # Dictionary learning and fixed-dictionary projection
 # -------------------------------------------------------------------------
 
 def dictionary_learning_pytorch(X, n_components=100, lambda_l1=0.1,
-                                n_iter=20, lr=0.01, device='cpu',
-                                random_seed=42):
-    """Learn a dictionary from training data only."""
+                                n_iter=8, lr=0.01, device='cpu',
+                                random_seed=42, ridge=1e-4):
+    """Consistent canonical sparse dictionary learning on training data.
+
+    The coefficient objective is the per-subject canonical form
+    ``0.5 ||x-Da||_2^2 + alpha ||a||_1``.  Unlike the historical mean loss,
+    its sparse penalty is independent of feature count and split size.
+
+    ``ridge`` is a dimensionless factor.  At each dictionary update the
+    effective diagonal ridge is ``ridge * mean(diag(A.T @ A))`` so its
+    strength remains stable when coefficient scale changes.
+    """
+    del lr
     set_random_seeds(random_seed)
     X = np.asarray(X, dtype=np.float32)
     Xt = torch.as_tensor(X, dtype=torch.float32, device=device)
     n_subjects, n_features = X.shape
 
     D = torch.randn(n_features, n_components, device=device)
+    order = torch.randperm(n_subjects, device=device)
+    seeded = min(n_subjects, n_components)
+    D[:, :seeded] = Xt[order[:seeded]].T
     D = D / D.norm(dim=0, keepdim=True).clamp_min(1e-8)
     A = torch.zeros(n_subjects, n_components, device=device)
 
+    history = []
+    total_reinitialized = 0
     for iteration in range(n_iter):
-        A = A.detach().requires_grad_(True)
-        optA = optim.SGD([A], lr=lr)
-        for _ in range(5):
-            optA.zero_grad(set_to_none=True)
-            recon = A.matmul(D.T)
-            lossA = (Xt - recon).square().mean() + lambda_l1 * A.abs().mean()
-            lossA.backward()
-            optA.step()
-        A = A.detach()
+        A_np, solver = apply_dictionary(
+            D.detach().cpu().numpy(), X, lambda_l1=lambda_l1,
+            max_iter=1000, tol=5e-5, device=device,
+            return_diagnostics=True)
+        A = torch.as_tensor(A_np, dtype=torch.float32, device=device)
+
+        sd = torch.std(A, dim=0, correction=0)
+        positive = sd[sd > 0]
+        reference = (torch.median(positive) if positive.numel()
+                     else torch.zeros((), device=device))
+        dead = sd < torch.maximum(
+            torch.as_tensor(1e-8, device=device), reference * 1e-4)
+        dead_indices = torch.nonzero(dead, as_tuple=False).flatten()
+        for offset, atom_index in enumerate(dead_indices.tolist()):
+            subject = offset % n_subjects
+            residual = Xt[subject] - A[subject].matmul(D.T)
+            norm = residual.norm()
+            if norm < 1e-10:
+                residual = torch.randn(n_features, device=device)
+                norm = residual.norm()
+            D[:, atom_index] = residual / norm
+            A[:, atom_index] = 0.0
+            A[subject, atom_index] = norm
+        total_reinitialized += int(dead_indices.numel())
 
         ata = A.T.matmul(A)
-        ridge = 1e-6 * torch.eye(n_components, device=device, dtype=ata.dtype)
+        ata_mean_diagonal = torch.diagonal(ata).mean()
+        if (not torch.isfinite(ata_mean_diagonal) or
+                float(ata_mean_diagonal.item()) <= 0.0):
+            raise RuntimeError(
+                "Invalid A.T@A mean diagonal during dictionary update")
+        effective_ridge = float(ridge) * float(ata_mean_diagonal.item())
+        ridge_matrix = effective_ridge * torch.eye(
+            n_components, device=device, dtype=ata.dtype)
         xta = Xt.T.matmul(A)
         try:
-            D = torch.linalg.solve(ata + ridge, xta.T).T
+            D = torch.linalg.solve(ata + ridge_matrix, xta.T).T
         except RuntimeError:
-            D = xta.matmul(torch.linalg.pinv(ata + ridge))
+            D = xta.matmul(torch.linalg.pinv(ata + ridge_matrix))
         D = D / D.norm(dim=0, keepdim=True).clamp_min(1e-8)
 
-        if iteration == 0 or (iteration + 1) % 5 == 0:
-            print(f"Dictionary iteration {iteration+1}/{n_iter}; "
-                  f"coefficient loss={lossA.item():.6g}")
+        history.append({
+            "outer_iteration": int(iteration + 1),
+            "coefficient_solver": solver,
+            "active_atoms_before_update": int(n_components - dead_indices.numel()),
+            "reinitialized_atoms": int(dead_indices.numel()),
+            "ata_mean_diagonal": float(ata_mean_diagonal.item()),
+            "ridge_factor": float(ridge),
+            "effective_ridge": float(effective_ridge),
+        })
+        print(f"Canonical dictionary iteration {iteration+1}/{n_iter}; "
+              f"active={n_components-dead_indices.numel()}; "
+              f"reinitialized={dead_indices.numel()}; "
+              f"ata_mean_diag={float(ata_mean_diagonal.item()):.6g}; "
+              f"effective_ridge={effective_ridge:.6g}")
 
-    return D.detach().cpu().numpy(), A.detach().cpu().numpy()
+    final_A, final_solver = apply_dictionary(
+        D.detach().cpu().numpy(), X, lambda_l1=lambda_l1,
+        max_iter=5000, tol=1e-5, device=device, return_diagnostics=True)
+    return D.detach().cpu().numpy(), final_A, {
+        "objective": "0.5*||x-Da||_2^2 + alpha*||a||_1 per subject",
+        "alpha": float(lambda_l1),
+        "dictionary_update_ridge_policy": (
+            "factor * mean(diag(A.T @ A)) at every outer iteration"
+        ),
+        "dictionary_update_ridge_factor": float(ridge),
+        "effective_ridge_min": float(min(
+            item["effective_ridge"] for item in history)),
+        "effective_ridge_max": float(max(
+            item["effective_ridge"] for item in history)),
+        "outer_iterations": int(n_iter),
+        "total_reinitialized_atoms": int(total_reinitialized),
+        "history": history,
+        "final_training_solver": final_solver,
+    }
 
 
 def _soft_threshold(x, threshold):
     return torch.sign(x) * torch.clamp(torch.abs(x) - threshold, min=0.0)
 
 
-def apply_dictionary(D, X, lambda_l1=0.1, max_iter=1000,
-                     tol=1e-6, device='cpu'):
+def apply_dictionary(D, X, lambda_l1=0.1, max_iter=5000,
+                     tol=1e-5, device='cpu', return_diagnostics=False):
     """
     Estimate coefficients for a fixed dictionary with adaptive-restart FISTA.
 
@@ -272,18 +412,19 @@ def apply_dictionary(D, X, lambda_l1=0.1, max_iter=1000,
     gram = Dt.T.matmul(Dt)
     x_times_d = Xt.matmul(Dt)
     largest_eigenvalue = torch.linalg.eigvalsh(gram).max()
-    lipschitz = (2.0 * largest_eigenvalue / float(n_features)).clamp_min(1e-12)
+    lipschitz = largest_eigenvalue.clamp_min(1e-12)
     step_size = 1.0 / lipschitz
-    threshold = step_size * float(lambda_l1) / float(n_components)
+    threshold = step_size * float(lambda_l1)
 
     A = torch.zeros(n_subjects, n_components, device=device)
     Y = A.clone()
     momentum = 1.0
     relative_change = np.inf
     converged_at = max_iter
+    restart_count = 0
 
     for iteration in range(1, max_iter + 1):
-        gradient = 2.0 / float(n_features) * (Y.matmul(gram) - x_times_d)
+        gradient = Y.matmul(gram) - x_times_d
         A_new = _soft_threshold(Y - step_size * gradient, threshold)
         delta = A_new - A
         relative_change = float((torch.linalg.norm(delta) /
@@ -292,41 +433,74 @@ def apply_dictionary(D, X, lambda_l1=0.1, max_iter=1000,
         momentum_new = (1.0 + np.sqrt(1.0 + 4.0 * momentum * momentum)) / 2.0
         Y_new = A_new + ((momentum - 1.0) / momentum_new) * delta
 
-        # Adaptive restart to reduce FISTA oscillation.
-        if torch.sum((Y_new - A_new) * (A_new - A)) > 0:
+        # O'Donoghue-Candes gradient restart.  This must use the current
+        # extrapolated point Y.  Using Y_new here makes the dot product a
+        # positive multiple of ||A_new - A||^2 and restarts every iteration,
+        # accidentally reducing FISTA to unaccelerated ISTA.
+        if torch.sum((Y - A_new) * (A_new - A)) > 0:
             momentum_new = 1.0
             Y_new = A_new.clone()
+            restart_count += 1
 
         A, Y, momentum = A_new, Y_new, momentum_new
         if relative_change < tol:
             converged_at = iteration
             break
 
-    objective = ((Xt - A.matmul(Dt.T)).square().mean() +
-                 float(lambda_l1) * A.abs().mean())
+    residual = Xt - A.matmul(Dt.T)
+    objective = (0.5 * residual.square().sum(dim=1).mean() +
+                 float(lambda_l1) * A.abs().sum(dim=1).mean())
     print("Fixed-dictionary coding: "
           f"subjects={n_subjects}, features={n_features}, "
           f"components={n_components}, iterations={converged_at}, "
           f"relative_change={relative_change:.3e}, "
           f"objective={objective.item():.6g}")
-    return A.detach().cpu().numpy()
+    coefficients = A.detach().cpu().numpy()
+    diagnostics = {
+        "subjects": int(n_subjects),
+        "features": int(n_features),
+        "components": int(n_components),
+        "iterations": int(converged_at),
+        "max_iterations": int(max_iter),
+        "relative_change": float(relative_change),
+        "tolerance": float(tol),
+        "converged": bool(relative_change < tol),
+        "adaptive_restart_count": int(restart_count),
+        "objective": float(objective.item()),
+    }
+    if return_diagnostics:
+        return coefficients, diagnostics
+    return coefficients
 
 
 def process_modality(i, X_train, dicl_dim, X_val, X_test,
-                     lambda_l1=0.1, projection_max_iter=1000,
-                     projection_tol=1e-6, random_seed=42):
+                     lambda_l1=0.1, projection_max_iter=5000,
+                     projection_tol=1e-5, random_seed=42,
+                     dictionary_update_ridge=1e-4):
     print(f"Starting dictionary learning for modality {i}")
-    D, _ = dictionary_learning_pytorch(
+    feature_mean = np.mean(X_train, axis=0, dtype=np.float64).astype(np.float32)
+    X_train = np.asarray(X_train, dtype=np.float32) - feature_mean
+    X_val = np.asarray(X_val, dtype=np.float32) - feature_mean
+    X_test = np.asarray(X_test, dtype=np.float32) - feature_mean
+    global_rms = float(np.sqrt(np.mean(X_train.astype(np.float64) ** 2)))
+    if not np.isfinite(global_rms) or global_rms <= 0:
+        raise RuntimeError(f"Invalid training-derived RMS for modality {i}")
+    X_train = (X_train / global_rms).astype(np.float32)
+    X_val = (X_val / global_rms).astype(np.float32)
+    X_test = (X_test / global_rms).astype(np.float32)
+
+    D, _, learning_diagnostics = dictionary_learning_pytorch(
         X_train, n_components=dicl_dim, lambda_l1=lambda_l1,
-        n_iter=20, lr=0.01, device='cpu', random_seed=random_seed + i)
+        n_iter=8, lr=0.01, device='cpu', random_seed=random_seed + i,
+        ridge=dictionary_update_ridge)
 
     # Re-estimate all splits against the same final dictionary.
-    A_train = apply_dictionary(D, X_train, lambda_l1,
-                               projection_max_iter, projection_tol, 'cpu')
-    A_val = apply_dictionary(D, X_val, lambda_l1,
-                             projection_max_iter, projection_tol, 'cpu')
-    A_test = apply_dictionary(D, X_test, lambda_l1,
-                              projection_max_iter, projection_tol, 'cpu')
+    A_train, train_solver = apply_dictionary(
+        D, X_train, lambda_l1, projection_max_iter, projection_tol, 'cpu', True)
+    A_val, val_solver = apply_dictionary(
+        D, X_val, lambda_l1, projection_max_iter, projection_tol, 'cpu', True)
+    A_test, test_solver = apply_dictionary(
+        D, X_test, lambda_l1, projection_max_iter, projection_tol, 'cpu', True)
 
     train_sd = np.std(A_train, axis=0, ddof=0)
     train_sd[train_sd == 0] = np.nan
@@ -334,27 +508,105 @@ def process_modality(i, X_train, dicl_dim, X_val, X_test,
     test_ratio = np.nanmedian(np.std(A_test, axis=0, ddof=0) / train_sd)
     print(f"Modality {i} projection scale: validation/train SD={val_ratio:.4f}; "
           f"test/train SD={test_ratio:.4f}")
-    return i, D, A_train, A_val, A_test
+    solver_diagnostics = {
+        "modality_index": int(i),
+        "canonical_alpha": float(lambda_l1),
+        "equivalent_historical_mean_lambda": (
+            float(lambda_l1) * float(dicl_dim) / float(X_train.shape[1])
+        ),
+        "dictionary_update_ridge_policy": (
+            "factor * mean(diag(A.T @ A)) at every outer iteration"
+        ),
+        "dictionary_update_ridge_factor": float(dictionary_update_ridge),
+        "dictionary_learning": learning_diagnostics,
+        "train": train_solver,
+        "validation": val_solver,
+        "test": test_solver,
+    }
+    input_transform = {
+        "feature_mean": feature_mean,
+        "global_rms": float(global_rms),
+    }
+    return (i, D, A_train, A_val, A_test, solver_diagnostics,
+            input_transform)
 
 
 def parallel_dictionary_learning(Data_train, Data_validation, Data_test,
                                  dicl_dim, n_jobs=-1, lambda_l1=0.1,
-                                 projection_max_iter=1000,
-                                 projection_tol=1e-6, random_seed=42):
+                                 projection_max_iter=5000,
+                                 projection_tol=1e-5, random_seed=42,
+                                 dictionary_update_ridge=1e-4):
     results = Parallel(n_jobs=n_jobs)(
         delayed(process_modality)(
             i, Data_train[i], dicl_dim, Data_validation[i], Data_test[i],
-            lambda_l1, projection_max_iter, projection_tol, random_seed)
+            lambda_l1, projection_max_iter, projection_tol, random_seed,
+            dictionary_update_ridge)
         for i in range(len(Data_train)))
     results = sorted(results, key=lambda item: item[0])
 
     dictionaries = []
-    for i, D, A_train, A_val, A_test in results:
+    solver_diagnostics = []
+    input_transforms = []
+    for (i, D, A_train, A_val, A_test, diagnostics,
+         input_transform) in results:
         Data_train[i] = A_train
         Data_validation[i] = A_val
         Data_test[i] = A_test
         dictionaries.append(D)
-    return dictionaries, Data_train, Data_validation, Data_test
+        solver_diagnostics.append(diagnostics)
+        input_transforms.append(input_transform)
+    return (dictionaries, Data_train, Data_validation, Data_test,
+            solver_diagnostics, input_transforms)
+
+
+def _coefficient_scale_guard(train, validation, test, inactive_sd_ratio=1e-3):
+    """Standardize using training data and zero training-near-dead atoms."""
+    train = np.asarray(train, dtype=np.float32)
+    validation = np.asarray(validation, dtype=np.float32)
+    test = np.asarray(test, dtype=np.float32)
+    mean = np.mean(train, axis=0, dtype=np.float64)
+    sd = np.std(train, axis=0, ddof=0, dtype=np.float64)
+    positive = sd[np.isfinite(sd) & (sd > 0)]
+    if positive.size == 0:
+        raise RuntimeError("All dictionary coefficient columns have zero variance")
+    reference_sd = float(np.median(positive))
+    sd_floor = max(float(np.finfo(np.float32).eps),
+                   float(inactive_sd_ratio) * reference_sd)
+    active = np.isfinite(sd) & (sd >= sd_floor)
+    if not np.any(active):
+        raise RuntimeError("Coefficient scale guard removed every dictionary atom")
+
+    divisor = np.where(active, sd, 1.0)
+    transformed = []
+    for matrix in (train, validation, test):
+        z = (matrix.astype(np.float64) - mean) / divisor
+        z[:, ~active] = 0.0
+        transformed.append(z.astype(np.float32))
+
+    split_names = ("train", "validation", "test")
+    split_stats = {}
+    for name, raw, z in zip(split_names, (train, validation, test), transformed):
+        finite_z = z[np.isfinite(z)]
+        split_stats[name] = {
+            "raw_abs_max": float(np.max(np.abs(raw))),
+            "standardized_abs_max": float(np.max(np.abs(finite_z))),
+            "standardized_abs_p99_9": float(np.percentile(np.abs(finite_z), 99.9)),
+        }
+    diagnostics = {
+        "reference_train_sd_median_positive": reference_sd,
+        "inactive_sd_ratio": float(inactive_sd_ratio),
+        "train_sd_floor": sd_floor,
+        "n_atoms": int(sd.size),
+        "n_active_atoms": int(np.sum(active)),
+        "n_inactive_atoms": int(np.sum(~active)),
+        "train_sd_min": float(np.min(sd)),
+        "train_sd_p01": float(np.percentile(sd, 1)),
+        "train_sd_p05": float(np.percentile(sd, 5)),
+        "train_sd_median": float(np.median(sd)),
+        "train_sd_max": float(np.max(sd)),
+        "split_stats": split_stats,
+    }
+    return transformed[0], transformed[1], transformed[2], active, diagnostics
 
 
 class load_Multimodal_data(Dataset):
@@ -387,8 +639,13 @@ def SupervisedFLICA(x_train, y_train, nlat, x_test, y_test, Data_test,
                     init_method='random', dropout=0.25, device='cpu',
                     auto_weight=(1, 1, 1, 1),
                     lambdas=(0.25, 0.25, 0.25, 0.25), lr=0.001,
-                    batch_size=512, maxiter=50, dicl_dim=100):
-    del output_dir
+                    batch_size=512, maxiter=50, dicl_dim=100,
+                    dictionary_alpha=0.1,
+                    dictionary_update_ridge=1e-4,
+                    inactive_sd_ratio=1e-3,
+                    projection_max_iter=5000,
+                    projection_tol=1e-5):
+    output_path = Path(output_dir)
     y_train = _as_2d_targets(y_train).astype(np.float32)
     y_test = _as_2d_targets(y_test).astype(np.float32)
     x_train = [np.asarray(x, dtype=np.float32).copy() for x in x_train]
@@ -400,21 +657,93 @@ def SupervisedFLICA(x_train, y_train, nlat, x_test, y_test, Data_test,
     device = torch.device(device)
 
     print("Applying Dictionary Learning")
-    dictionaries, x_train, x_test, Data_test = parallel_dictionary_learning(
+    (dictionaries, x_train, x_test, Data_test,
+     solver_diagnostics, input_transforms) = parallel_dictionary_learning(
         x_train, x_test, Data_test, dicl_dim, n_jobs=-1,
-        lambda_l1=0.1, projection_max_iter=1000,
-        projection_tol=1e-6, random_seed=random_seed)
+        lambda_l1=dictionary_alpha, projection_max_iter=projection_max_iter,
+        projection_tol=projection_tol, random_seed=random_seed,
+        dictionary_update_ridge=dictionary_update_ridge)
     Data_train = copy.deepcopy(x_train)
     Data_validation = copy.deepcopy(x_test)
+    coefficient_dir = output_path / "coefficient_diagnostics"
+    coefficient_dir.mkdir(exist_ok=False)
+    dictionary_dir = output_path / "dictionary_artifacts"
+    dictionary_dir.mkdir(exist_ok=False)
+    for i, (dictionary, transform) in enumerate(zip(
+            dictionaries, input_transforms)):
+        np.save(dictionary_dir / f"modality_{i}_dictionary.npy", dictionary)
+        np.savez_compressed(
+            dictionary_dir / f"modality_{i}_input_transform.npz",
+            feature_mean=transform["feature_mean"],
+            global_rms=np.asarray([transform["global_rms"]], dtype=np.float64))
+    with (coefficient_dir / "fista_solver_diagnostics.json").open("w") as stream:
+        json.dump(solver_diagnostics, stream, indent=2)
+        stream.write("\n")
+    # Persist the computed coefficients before enforcing convergence so a
+    # failed diagnostic remains fully auditable and need not be recomputed.
+    for i in range(nmod):
+        np.savez_compressed(
+            coefficient_dir / f"modality_{i}_raw_coefficients.npz",
+            train=x_train[i], validation=x_test[i], test=Data_test[i])
+    unconverged = [
+        (entry["modality_index"], split)
+        for entry in solver_diagnostics
+        for split in ("train", "validation", "test")
+        if not entry[split]["converged"]
+    ]
+    if unconverged:
+        raise RuntimeError(
+            "Fixed-dictionary FISTA failed its convergence requirement for "
+            f"{unconverged}; diagnostics were preserved in {coefficient_dir}"
+        )
     print("Dictionary Learning Done.")
 
     nfea = [x.shape[1] for x in x_train]
+    scale_diagnostics = []
     for i in range(nmod):
-        mean = x_train[i].mean(axis=0)
-        sd = x_train[i].std(axis=0, ddof=0)
-        sd[sd == 0] = 1e-3
-        x_train[i] = (x_train[i] - mean) / sd
-        x_test[i] = (x_test[i] - mean) / sd
+        (x_train[i], x_test[i], guarded_test, active,
+         diagnostics) = _coefficient_scale_guard(
+            x_train[i], x_test[i], Data_test[i], inactive_sd_ratio)
+        raw_train = Data_train[i]
+        coefficient_mean = np.mean(raw_train, axis=0, dtype=np.float64)
+        coefficient_sd = np.std(raw_train, axis=0, ddof=0, dtype=np.float64)
+        np.savez_compressed(
+            dictionary_dir / f"modality_{i}_coefficient_normalization.npz",
+            mean=coefficient_mean,
+            sd=coefficient_sd,
+            active=active)
+        diagnostics["modality_index"] = int(i)
+        diagnostics["active_atom_indices"] = np.flatnonzero(active).tolist()
+        centered_active = (raw_train[:, active].astype(np.float64) -
+                           coefficient_mean[active])
+        diagnostics["active_coefficient_effective_rank"] = int(
+            np.linalg.matrix_rank(centered_active))
+        scale_diagnostics.append(diagnostics)
+        if (diagnostics["n_active_atoms"] < 50 or
+                diagnostics["active_coefficient_effective_rank"] < 50):
+            with (coefficient_dir / "scale_guard_diagnostics.json").open("w") as stream:
+                json.dump(scale_diagnostics, stream, indent=2)
+                stream.write("\n")
+            raise RuntimeError(
+                f"Modality {i} has fewer than 50 active/effective "
+                "coefficient directions")
+        if max(
+            diagnostics["split_stats"][split]["standardized_abs_max"]
+            for split in ("validation", "test")
+        ) > 100.0:
+            with (coefficient_dir / "scale_guard_diagnostics.json").open("w") as stream:
+                json.dump(scale_diagnostics, stream, indent=2)
+                stream.write("\n")
+            raise RuntimeError(
+                f"Modality {i} still has an absolute standardized held-out "
+                "coefficient above 100 after the training-only guard"
+            )
+        # Keep the unnormalized coefficients for reproducible extraction;
+        # guarded_test is checked here and regenerated identically later.
+        del guarded_test
+    with (coefficient_dir / "scale_guard_diagnostics.json").open("w") as stream:
+        json.dump(scale_diagnostics, stream, indent=2)
+        stream.write("\n")
 
     y_mean = np.nanmean(y_train, axis=0)
     y_stds = np.nanstd(y_train, axis=0)
@@ -431,12 +760,20 @@ def SupervisedFLICA(x_train, y_train, nlat, x_test, y_test, Data_test,
 
     if init_method == 'random':
         model = SupervisedFLICAmodel(nfea, nlat, ntask, dropout, device).to(device)
-    else:
-        init_spatial, init_weight, init_bias, _ = Initialize_SuperBigFLICA(
+    elif init_method == 'migp':
+        (init_spatial, init_weight, init_bias, mmigp_basis,
+         mmigp_diagnostics) = Initialize_SuperBigFLICA(
             x_train, y_train_z, nlat, train_ind)
+        np.save(dictionary_dir / "mmigp_subject_basis.npy", mmigp_basis)
+        with (coefficient_dir / "mmigp_initialization_diagnostics.json").open(
+                "w") as stream:
+            json.dump(mmigp_diagnostics, stream, indent=2)
+            stream.write("\n")
         model = SupervisedFLICAmodel(
             nfea, nlat, ntask, dropout, device,
             init_spatial, init_weight, init_bias).to(device)
+    else:
+        raise ValueError(f"Unsupported init_method: {init_method}")
 
     loss_fun = loss_SuperBigFLICA_regression(
         ntask, nmod, x_train[0].shape[0], device, auto_weight, lambdas).to(device)
@@ -452,6 +789,13 @@ def SupervisedFLICA(x_train, y_train, nlat, x_test, y_test, Data_test,
 
     loss_all_test = np.zeros((maxiter, 4), dtype=np.float64)
     best_corr, pred_best, best_model = -np.inf, None, None
+    checkpoint_audit = []
+    target_min = np.nanmin(y_train, axis=0)
+    target_max = np.nanmax(y_train, axis=0)
+    target_range = np.maximum(target_max - target_min, y_stds)
+    allowed_min = target_min - target_range
+    allowed_max = target_max + target_range
+    mae_limit = float(np.max(np.maximum(target_range, 3.0 * y_stds)))
 
     for epoch in range(maxiter + 1):
         torch.manual_seed(epoch)
@@ -509,10 +853,32 @@ def SupervisedFLICA(x_train, y_train, nlat, x_test, y_test, Data_test,
         finite = np.isfinite(pred_val) & np.isfinite(y_val_orig)
         val_mae = float(np.mean(np.abs(pred_val[finite] - y_val_orig[finite])))
 
-        if epoch >= 1 and np.isfinite(corr_val) and corr_val > best_corr:
+        predictions_finite = bool(np.isfinite(pred_val).all())
+        predictions_in_range = bool(
+            predictions_finite and
+            np.all(pred_val >= allowed_min[None, :]) and
+            np.all(pred_val <= allowed_max[None, :]))
+        mae_valid = bool(np.isfinite(val_mae) and val_mae <= mae_limit)
+        scale_valid = predictions_finite and predictions_in_range and mae_valid
+        selected = bool(
+            epoch >= 1 and scale_valid and np.isfinite(corr_val) and
+            corr_val > best_corr)
+        if selected:
             best_corr = corr_val
             pred_best = pred_val.copy()
             best_model = copy.deepcopy(model)
+        checkpoint_audit.append({
+            "epoch": int(epoch),
+            "validation_corr": float(corr_val),
+            "validation_mae": float(val_mae),
+            "prediction_min": float(np.min(pred_val)),
+            "prediction_max": float(np.max(pred_val)),
+            "allowed_prediction_min": allowed_min.tolist(),
+            "allowed_prediction_max": allowed_max.tolist(),
+            "mae_limit": mae_limit,
+            "scale_valid": scale_valid,
+            "selected": selected,
+        })
         if epoch >= 1:
             loss_all_test[epoch - 1] = [l1, l2, l3, l4]
 
@@ -522,10 +888,17 @@ def SupervisedFLICA(x_train, y_train, nlat, x_test, y_test, Data_test,
               f"{val_loss/len(val_loader.dataset):.4f} | "
               f"Validation MAE: {val_mae:.4f} | "
               f"Validation Corr: {corr_val:.4f} | "
+              f"Scale Valid: {scale_valid} | "
               f"Time: {time.time()-start:.2f}s")
 
+    with (output_path / "checkpoint_selection_audit.json").open("w") as stream:
+        json.dump(checkpoint_audit, stream, indent=2)
+        stream.write("\n")
     if best_model is None:
-        raise RuntimeError("No valid best model was selected")
+        raise RuntimeError(
+            "No checkpoint satisfied finite prediction, training-derived "
+            "prediction-range, and validation-MAE scale gates"
+        )
     return (pred_best, best_model.to('cpu'), loss_all_test, best_corr,
             model.to('cpu'), Data_train, Data_validation, Data_test,
             dictionaries)
@@ -535,7 +908,7 @@ def SupervisedFLICA(x_train, y_train, nlat, x_test, y_test, Data_test,
 # -------------------------------------------------------------------------
 
 def get_model_param(x_train, x_test, y_train, y_test, best_model,
-                    get_sp_load=1):
+                    get_sp_load=1, inactive_sd_ratio=1e-3):
     y_train = _as_2d_targets(y_train)
     y_test = _as_2d_targets(y_test)
     nmod = len(x_train)
@@ -548,16 +921,10 @@ def get_model_param(x_train, x_test, y_train, y_test, best_model,
     print('Data Normalization...')
     train_norm, test_norm = [], []
     for i in range(nmod):
-        tr = torch.as_tensor(x_train[i], dtype=torch.float32).clone()
-        te = torch.as_tensor(x_test[i], dtype=torch.float32).clone()
-        mean = tr.mean(dim=0)
-        try:
-            sd = tr.std(dim=0, correction=0)
-        except TypeError:
-            sd = tr.std(dim=0, unbiased=False)
-        sd = torch.where(sd == 0, torch.full_like(sd, 1e-3), sd)
-        train_norm.append((tr - mean) / sd)
-        test_norm.append((te - mean) / sd)
+        tr, te, _, _, _ = _coefficient_scale_guard(
+            x_train[i], x_test[i], x_test[i], inactive_sd_ratio)
+        train_norm.append(torch.as_tensor(tr, dtype=torch.float32))
+        test_norm.append(torch.as_tensor(te, dtype=torch.float32))
 
     y_mean = np.nanmean(y_train, axis=0)
     y_stds = np.nanstd(y_train, axis=0)
@@ -688,6 +1055,15 @@ def SBF_load(opts, behavioral_train, behavioral_test,
             matches = [os.path.join(folder, f) for f in files
                        if f.endswith(suffix)]
             if len(matches) > 1:
+                # FreeSurfer modalities are represented by one LH/RH pair.
+                # The upstream example documents this layout, but its generic
+                # multiple-file guard rejected it before the MGH loader ran.
+                if suffix == '.mgh' and len(matches) == 2:
+                    by_name = {
+                        os.path.basename(match)[:2]: match for match in matches
+                    }
+                    if set(by_name) == {'lh', 'rh'}:
+                        return by_name['lh']
                 raise RuntimeError(f"Multiple {suffix} files in {folder}: {matches}")
             if matches:
                 return matches[0]
@@ -758,9 +1134,28 @@ def SBF_load(opts, behavioral_train, behavioral_test,
             header[modality_name] = header[key] = left.header
             vol = np.concatenate((left.get_fdata(), right.get_fdata()), axis=0)
             data2d = np.reshape(vol, (vol.shape[0], vol.shape[3]), order='F')
-            masks[i] = np.ones(data2d.shape[0], dtype=np.float32)
-            mask_mgh = masks[i].copy()
-            data[i] = data2d
+            # Use FreeSurfer's authoritative fsaverage cortex labels, rather
+            # than inferring the mask independently from each modality.
+            if mask_mgh is None:
+                vertices_per_hemi = left.shape[0]
+                surface_mask = np.zeros(2 * vertices_per_hemi, dtype=bool)
+                left_label = nib.freesurfer.read_label(os.path.join(
+                    opts['path_to_fsavg'], 'label', 'lh.cortex.label'))
+                right_label = nib.freesurfer.read_label(os.path.join(
+                    opts['path_to_fsavg'], 'label', 'rh.cortex.label'))
+                surface_mask[left_label] = True
+                surface_mask[vertices_per_hemi + right_label] = True
+                mask_mgh = surface_mask.astype(np.float32)
+            else:
+                surface_mask = mask_mgh.astype(bool)
+            outside_max = float(np.max(np.abs(data2d[~surface_mask, :])))
+            if outside_max > 1e-6:
+                raise ValueError(
+                    f"Non-cortex MGH values are not zero in {folder}; "
+                    f"maximum absolute value={outside_max}"
+                )
+            masks[i] = surface_mask.astype(np.float32)
+            data[i] = data2d[surface_mask, :]
 
         elif ext in ('.dscalar.nii', '.dtseries.nii'):
             img = nib.load(path)

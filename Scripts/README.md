@@ -1,31 +1,16 @@
-# SBF Data Fusion
+# August pipeline entry points
 
-This repository contains scripts for running **SuperBigFLICA (SBF)** data fusion analyses.
+See the root README for input alignment, version boundaries, installation and run commands.
 
-## Files
-- **SBF.py** – main script for running data fusion.
-- **sbf_utils.py** – helper functions used by `SBF.py`.
-- **RUN_SBF_sbatch.sh** – SLURM batch script for running jobs on an HPC cluster.
+- run_end_to_end.py: fresh dictionaries and validation-selected training.
+- sbf_utils.py: August model, projection and loader utilities.
+- run_loss_ablation.py / run_nested_cv.py: imported training support; their additional experimental entry points are not the main run recipe.
+- validate_and_summarize.py: ten-round audit before locked test evaluation.
+- evaluate_locked_test.py / summarize_locked_test.py: frozen test evaluation and aggregate summary.
+- project_external_cohort.py: saved-bundle inference on aligned external matrices.
+- smoke_test.py: existing synthetic selection-gate checks.
+- SBF.py: compatibility alias accepting run_end_to_end CLI flags.
+- RUN_SBF_sbatch.sh: portable ten-round CPU submission recipe.
+- AUGUST_SOURCE_HASHES.json: exact archived source identities.
 
-## Usage
-### Local run
-```bash
-python SBF.py
-```
-
-### Slurm cluster run
-```bash
-sbatch RUN_SBF_sbatch.sh
-```
-
-## Notes
-- `SBF.py` uses `sbf_utils.load_nidp_csv` (`np.genfromtxt`) to load CSVs and allows empty cells (filled as `NaN`), which are filtered during processing.
-- Device selection uses `sbf_utils.select_device()` and can be overridden with `SBF_DEVICE` (e.g., `export SBF_DEVICE=cuda`).
-  - Auto-selection order: `cuda` → `mps` → `cpu` (falls back to CPU if GPU is unavailable).
-  - Valid device options: `cpu`, `cuda`, `mps`.
-  - `cpu`: standard processor, universally available.
-  - `cuda`: NVIDIA GPU acceleration (CUDA toolkit required).
-  - `mps`: Apple GPU acceleration via Metal (Apple Silicon).
-- Set `save_all_epochs` in `SBF.py` to `True` to save per-epoch correlation metrics, spatial maps, and latent loadings under `output_dir/epoch_details`.
-- On clusters, load the appropriate CUDA toolkit module (for example: `module load shared` and `module load cuda11.8/toolkit/11.8.0`).
-- If deterministic algorithms are enabled, set `CUBLAS_WORKSPACE_CONFIG=:4096:8` (or `:16:8`) before running with CUDA.
+Scientific Python sources were copied unchanged from the August execution archive; wrapper paths are configurable. No data or results are included.

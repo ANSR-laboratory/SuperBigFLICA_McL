@@ -1,67 +1,20 @@
 #!/bin/bash
-#SBATCH --job-name=SupBigFLICA         # Job name
-#SBATCH --output=%x_%j.out             # Standard output file name (%x: job name, %j: job ID)
-#SBATCH --error=%x_%j.err              # Standard error file name
-#SBATCH --cpus-per-task=2              # Number of CPUs per task (reduced based on low CPU utilization)
-#SBATCH --time=72:00:00                # Time limit (hh:mm:ss)
-#SBATCH --mem=100G                     # Memory requirement (increased based on observed utilization)
-#SBATCH --mail-type=ALL                # Email notifications for job start, end, and failure
-#SBATCH --mail-user=ycheng23@mgh.harvard.com
-#SBATCH --partition=defq
-#SBATCH --gres=gpu:1
-
-# Set up output directory
-BASE_OUTPUT_DIR="/data/qnilab/AD_NPS_R01_2022/ADNI_Data_Fusion/SBF_Outputs/SBF_ADNI_CDR/CDRSB" # Replace with your desired directory for output
-OUTPUT_DIR="$BASE_OUTPUT_DIR/job_$(date +'%Y%m%d_%H%M%S')"
-mkdir -p "$OUTPUT_DIR"  # Create the directory if it doesn't exist
-echo "All outputs will be saved to: $OUTPUT_DIR"
-
-# Generate a log file name with the current date and time
-LOG_DIR="/home/ycheng23/SuperBigFLICA_python/Latest_Versions_14Nov2024/time_logs"  # Replace with your desired directory for logs
-mkdir -p "$LOG_DIR"  # Create the directory if it doesn't exist
-LOG_FILE="$LOG_DIR/run_log_$(date +'%Y%m%d_%H%M%S').log"
-ERROR_FILE="$OUTPUT_DIR/error_log$(date +'%Y%m%d_%H%M%S').err"
-
-# Record the start time
-START_TIME=$(date +"%Y-%m-%d %H:%M:%S")
-echo "Script started at: $START_TIME" | tee -a "$LOG_FILE"
-
-# Activate virtual environment
-# VENV_DIR="/data/qnilab/Virt_Envs/bigflica"  
-VENV_DIR="/data/qnilab/AD_NPS_R01_2022/ADNI_Data_Fusion/.myenv"  
-
-source "$VENV_DIR/bin/activate"
-echo "Virtual environment activated: $VENV_DIR" | tee -a "$LOG_FILE"
-
-# Load required module (only when module command exists)
-if command -v module >/dev/null 2>&1; then
-  module purge
-  module add fsl              # Load FSL (version 6.0.7.4 assumed)
-  module add freesurfer       # Load FreeSurfer (version 7.3.2 assumed)
-  module add shared
-  module add cuda11.8/toolkit/11.8.0
-  echo "Modules fsl, freesurfer, cuda loaded." | tee -a "$LOG_FILE"
-else
-  echo "Module command not found; skipping module loads." | tee -a "$LOG_FILE"
-fi
-
-# Required for deterministic CuBLAS behavior when torch.use_deterministic_algorithms(True)
-export CUBLAS_WORKSPACE_CONFIG=:4096:8
-
-# Start a timer and run the Python script
-SECONDS=0  # Initialize a timer
-
-# Uncomment the Python script you want to run
-python3 -u SBF.py
-
-
-# Record the end time
-END_TIME=$(date +"%Y-%m-%d %H:%M:%S")
-echo "Script ended at: $END_TIME" | tee -a "$LOG_FILE"
-
-# Calculate and log the elapsed time
-ELAPSED_TIME=$SECONDS
-echo "Total computing time: $(($ELAPSED_TIME / 3600)) hours, $((($ELAPSED_TIME / 60) % 60)) minutes, $(($ELAPSED_TIME % 60)) seconds" | tee -a "$LOG_FILE"
-
-# Notify the user where the log file is saved
-echo "Log file saved to: $LOG_FILE"
+#SBATCH --job-name=SBF_AUGUST10
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=24G
+#SBATCH --time=01:00:00
+#SBATCH --array=0-9%2
+#SBATCH --output=logs/%x_%A_%a.out
+#SBATCH --error=logs/%x_%A_%a.err
+set -euo pipefail
+: "${SBF_RUN_ROOT:?Set output run root}"
+: "${SBF_INPUT_VIEW:?Set train/validation-only imaging view}"
+: "${SBF_TARGET_ROOT:?Set target CSV folder}"
+: "${SBF_SCRIPTS_DIR:?Set absolute path to repository Scripts}"
+SEEDS=(555 666 777 888 999 1111 2222 3333 4444 5555)
+INDEX=${SLURM_ARRAY_TASK_ID}
+SEED=${SEEDS[$INDEX]}
+ROUND=$((INDEX + 1))
+export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1 LOKY_MAX_CPU_COUNT=1 PYTHONHASHSEED=${SEED}
+python3 -u "${SBF_SCRIPTS_DIR}/run_end_to_end.py"   --round "${ROUND}" --seed "${SEED}"   --output "${SBF_RUN_ROOT}/results/round${ROUND}_seed${SEED}"   --input-view "${SBF_INPUT_VIEW}"   --target-train "${SBF_TARGET_ROOT}/nIDP_CDRSB_matrix_training.csv"   --target-validation "${SBF_TARGET_ROOT}/nIDP_CDRSB_matrix_validation.csv"   --dictionary-dim 250 --alpha 0.1 --ridge-factor 1e-4   --inactive-sd-ratio 1e-3 --projection-max-iter 5000   --projection-tol 1e-5 --epochs 120 --lr 0.01   --batch-size 32 --dropout 0.2 --device cpu
