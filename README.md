@@ -4,7 +4,9 @@ SuperBigFLICA is a semi-supervised framework for multimodal neuroimaging data fu
 
 The current pipeline learns fresh dictionaries, uses fixed equal loss weights, and selects a model checkpoint using validation R² with prediction-quality checks. Training and held-out test evaluation are separate steps. Saved dictionaries and preprocessing state support projection of aligned external cohorts.
 
-**Versions.** This is the current version of the pipeline (October 2026). For the repository snapshot from the period of the 2026 DADM publication, see tag v1.0-DADM-2026. A correction to the published results is in preparation; this page will link to it once available.
+**Versions.** This is the current version of the pipeline, v2.0 (October 2026); see [CHANGELOG.md](CHANGELOG.md) for changes.
+For the repository snapshot from the period of the 2026 DADM publication, see tag [v1.0-DADM-2026](https://github.com/ANSR-laboratory/SuperBigFLICA_McL/tree/v1.0-DADM-2026).
+A correction to the published results is in preparation; this page will link to it once available.
 
 ## Installation
 
@@ -47,7 +49,7 @@ CT and PSA use paired left/right hemisphere MGH files; TAU, GM, and AMY use NIfT
 
 ```bash
 python Scripts/run_end_to_end.py \
-  --round 3 --seed 777 --output /path/to/run/results/round3_seed777 \
+  --round 1 --seed 555 --output /path/to/run/results/round1_seed555 \
   --input-view /path/to/train_validation_view \
   --target-train /path/to/nIDP_CDRSB_matrix_training.csv \
   --target-validation /path/to/nIDP_CDRSB_matrix_validation.csv \
@@ -81,7 +83,7 @@ After validation passes, evaluate a frozen model on the test set:
 
 ```bash
 python Scripts/evaluate_locked_test.py \
-  --root /path/to/run --round 3 \
+  --root /path/to/run --round 1 \
   --input-view /path/to/all_split_view \
   --target-root /path/to/target_csvs
 ```

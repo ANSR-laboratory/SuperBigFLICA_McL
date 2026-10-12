@@ -1,11 +1,5 @@
 {
-  "source_version": "August 12, 2026 final fixed-weight validation-R2 pipeline",
-  "executed_round3_source_hashes": {
-    "run_end_to_end.py": "85d5822455ad35b84253b1c793d233d8a23ed129bcb3f9b5e477f5ccfbf7301e",
-    "sbf_utils.py": "ee75a86a2f0146d6082150b0a6e705d0ee84dfaa836398b51e11ed2f71ed6fc3",
-    "run_nested_cv.py": "c78967001a25a04a50820251572e4e0bd4f1201b6b3078e088878e2e54b170cc",
-    "run_loss_ablation.py": "3545c67c0279e9d38ca44b6e3fc68dd33c0486fdf84be28c60c13866f479ffe4"
-  },
+  "source_version": "v2.0 (October 2026) final fixed-weight validation-R2 pipeline",
   "copied_source_hashes": {
     "sbf_utils.py": "ee75a86a2f0146d6082150b0a6e705d0ee84dfaa836398b51e11ed2f71ed6fc3",
     "run_end_to_end.py": "85d5822455ad35b84253b1c793d233d8a23ed129bcb3f9b5e477f5ccfbf7301e",
@@ -16,5 +10,15 @@
     "validate_and_summarize.py": "f60c7019a2dcdba9de0ab4f66a32c28b3912fb923dc42e5cf5b893b155209675",
     "summarize_locked_test.py": "ca744e94a858e6b488556599126877176f0078f8833311be65bfbbe5ba58ffc0",
     "smoke_test.py": "58d81b30a9e853dcd749c10815865b39e0eddacc5610fdd61d7b0ef1965694b9"
+  },
+  "executed_source_hashes": {
+    "run_end_to_end.py": "85d5822455ad35b84253b1c793d233d8a23ed129bcb3f9b5e477f5ccfbf7301e",
+    "sbf_utils.py": "ee75a86a2f0146d6082150b0a6e705d0ee84dfaa836398b51e11ed2f71ed6fc3",
+    "run_nested_cv.py": "c78967001a25a04a50820251572e4e0bd4f1201b6b3078e088878e2e54b170cc",
+    "run_loss_ablation.py": "3545c67c0279e9d38ca44b6e3fc68dd33c0486fdf84be28c60c13866f479ffe4"
+  },
+  "release_wrapper_hashes": {
+    "SBF.py": "397da2a4400eb266cdceca30c427c3bc82c562e24eb4635c0d9e150e6ab1520e",
+    "RUN_SBF_sbatch.sh": "a06ad584809ee0e038c9563d89c936f7177db0fc0cbb7a4258cfd4f31537319c"
   }
 }

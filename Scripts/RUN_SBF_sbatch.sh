@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=SBF_AUGUST10
+#SBATCH --job-name=SBF_v2
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=24G
 #SBATCH --time=01:00:00

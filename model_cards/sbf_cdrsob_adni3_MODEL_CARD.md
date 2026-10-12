@@ -1,4 +1,4 @@
-> **Historical model card.** This document describes an earlier model and is retained as historical documentation. Its component numbers, metrics, training recipe and availability links do not certify the August corrected-data pipeline or the September erratum model. See the root README for current version boundaries; no corrected pretrained checkpoint is distributed with this branch.
+> **Historical model card.** This document describes an earlier model. Its component numbers, metrics, training recipe and availability links do not describe v2.0 (October 2026). See the main README and CHANGELOG.md for the current pipeline. No trained checkpoint is distributed with the repository.
 
 # Model Card: SuperBigFLICA (SBF) for Predicting Clinical Dementia Rating (CDR-SOB)
 
